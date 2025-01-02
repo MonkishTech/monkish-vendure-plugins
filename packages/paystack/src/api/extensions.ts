@@ -1,15 +1,15 @@
-import gql from 'graphql-tag';
 import { DocumentNode } from 'graphql';
+import graphql from 'graphql-tag';
 
-export const shopApiSchemaExtensions: DocumentNode = gql`
+export const shopApiSchemaExtensions: DocumentNode = graphql`
   enum PaystackPaymentChannel {
-    CARD
-    BANK
-    USSD
-    QR
-    MOBILE_MONEY
-    BANK_TRANSFER
-    EFT
+    card
+    bank
+    ussd
+    qr
+    mobile_money
+    bank_transfer
+    eft
   }
 
   input PaystackPaymentIntentInput {

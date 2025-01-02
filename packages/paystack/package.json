@@ -2,15 +2,16 @@
   "name": "@monkish/vendure-paystack-plugin",
   "version": "0.0.1",
   "dependencies": {
-    "@vendure/admin-ui-plugin": "^3.1.1",
-    "dotenv": "16.4.7",
-    "graphql-tag": "*",
-    "graphql": "*",
-    "@nestjs/graphql": "*"
+    "axios": "^1.7.9"
   },
   "peerDependencies": {
+    "@nestjs/graphql": "*",
     "@nestjs/common": "*",
-    "@vendure/core": "*"
+    "@vendure/admin-ui-plugin": "*",
+    "@vendure/core": "*",
+    "gql.tada": "*",
+    "dotenv": "*",
+    "graphql-tag": "*"
   },
   "type": "commonjs",
   "main": "./dist/index.cjs",

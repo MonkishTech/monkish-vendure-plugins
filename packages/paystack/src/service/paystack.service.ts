@@ -6,7 +6,11 @@ import {
   UserInputError,
 } from '@vendure/core';
 import axios, { AxiosError, AxiosInstance } from 'axios';
-import { loggerCtx, PLUGIN_INIT_OPTIONS } from 'src/constants';
+import {
+  loggerCtx,
+  PLUGIN_INIT_OPTIONS,
+  SUPPORTED_CURRENCICES,
+} from 'src/constants';
 import { PaystackPluginOptions } from 'src/paystack.plugin';
 import {
   ErrorCode,
@@ -14,6 +18,7 @@ import {
   PaystackPaymentIntentError,
   PaystackPaymentIntentInput,
   PaystackPaymentIntentResult,
+  VerificationResponse,
 } from 'src/types';
 
 class PaymentIntentError implements PaystackPaymentIntentError {
@@ -25,7 +30,7 @@ class PaymentIntentError implements PaystackPaymentIntentError {
 export class PaystackService {
   constructor(
     private activeOrderService: ActiveOrderService,
-    @Inject(PLUGIN_INIT_OPTIONS) private options: PaystackPluginOptions
+    @Inject(PLUGIN_INIT_OPTIONS) private pluginOptions: PaystackPluginOptions
   ) {}
 
   async initializeTransaction(
@@ -47,6 +52,13 @@ export class PaystackService {
       throw new UserInputError('No customer found for active order');
     }
 
+    if (!SUPPORTED_CURRENCICES.includes(currencyCode)) {
+      return new PaymentIntentError(`
+        Currency code ${currencyCode} is not supported by Paystack. 
+        Supported currencies are: ${SUPPORTED_CURRENCICES.join(', ')}
+      `);
+    }
+
     try {
       const { data, status } =
         await this.getPaystackApiClient().post<PaystackPaymentIntent>(
@@ -55,7 +67,7 @@ export class PaystackService {
             amount: totalWithTax,
             email: customer.emailAddress,
             currency: currencyCode,
-            reference: `paystack-${code}`,
+            reference: code,
             callback_url: callbackUrl,
             metadata,
             channels,
@@ -75,11 +87,38 @@ export class PaystackService {
     }
   }
 
+  async verifyTransaction(reference: string) {
+    try {
+      const {
+        data: { data },
+        status,
+      } = await this.getPaystackApiClient().get<VerificationResponse>(
+        `/transaction/verify/${reference}`
+      );
+
+      if (status !== 200) {
+        Logger.error(
+          `Could not verify transaction with reference: ${reference}`,
+          loggerCtx
+        );
+        return;
+      }
+
+      const { amount } = data;
+    } catch (error) {
+      Logger.error(
+        `Could not verify transaction with reference: ${reference}`,
+        loggerCtx
+      );
+      Logger.error((error as AxiosError).toJSON().toString(), loggerCtx);
+    }
+  }
+
   private getPaystackApiClient(): AxiosInstance {
     return axios.create({
       baseURL: 'https://api.paystack.co',
       headers: {
-        Authorization: `Bearer ${this.options.secretKey}`,
+        Authorization: `Bearer ${this.pluginOptions.secretKey}`,
       },
       validateStatus: (status: number) => status < 500,
     });

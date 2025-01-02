@@ -11,7 +11,8 @@
     "@vendure/core": "*",
     "gql.tada": "*",
     "dotenv": "*",
-    "graphql-tag": "*"
+    "graphql-tag": "*",
+    "graphql": "*"
   },
   "type": "commonjs",
   "main": "./dist/index.cjs",

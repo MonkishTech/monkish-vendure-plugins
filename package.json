@@ -41,6 +41,8 @@
     "@nestjs/graphql": "*",
     "better-sqlite3": "*",
     "graphql": "*",
-    "graphql-tag": "*"
+    "graphql-tag": "*",
+    "express": "*",
+    "@types/express": "*"
   }
 }

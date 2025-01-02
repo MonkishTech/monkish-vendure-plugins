@@ -44,15 +44,12 @@ export type WebhookEvent = {
     | 'refund.processing';
 };
 
-export type VerificationResponse = {
-  status: boolean;
-  message: string;
+export type TransactionEvent = WebhookEvent & {
   data: {
     id: number;
     domain: string;
     status: string;
     reference: string;
-    receipt_number: string | null;
     amount: number;
     message: string | null;
     gateway_response: string;
@@ -61,23 +58,69 @@ export type VerificationResponse = {
     channel: string;
     currency: string;
     ip_address: string;
-    metadata: string | null;
-    log: {
-      start_time: number;
-      time_spent: number;
-      attempts: number;
-      errors: number;
-      success: boolean;
-      mobile: boolean;
-      input: unknown[];
-      history: {
-        type: string;
-        message: string;
-        time: number;
-      }[];
+    metadata: number | null;
+    fees: number | null;
+    customer: {
+      id: number;
+      first_name: string;
+      last_name: string;
+      email: string;
+      customer_code: string;
+      phone: string | null;
+      risk_action: string;
     };
+    authorization: {
+      authorization_code: string;
+      bin: string;
+      last4: string;
+      exp_month: string;
+      exp_year: string;
+      card_type: string;
+      bank: string;
+      country_code: string;
+      brand: string;
+      account_name: string | null;
+    };
+  };
+};
+
+export type RefundEvent = WebhookEvent & {
+  data: {
+    status: string;
+    transaction_reference: string;
+    refund_reference: string | null;
+    amount: string;
+    currency: string;
+    processor: string;
+    customer: {
+      first_name: string;
+      last_name: string;
+      email: string;
+    };
+    integration: number;
+    domain: string;
+  };
+};
+
+type PaystackResponse = {
+  status: boolean;
+  message: string;
+};
+
+export type VerificationResponse = PaystackResponse & {
+  data: {
+    id: number;
+    domain: string;
+    status: string;
+    reference: string;
+    amount: number;
+    gateway_response: string;
+    paid_at: string;
+    created_at: string;
+    channel: string;
+    currency: string;
+    ip_address: string;
     fees: number;
-    fees_split: unknown | null;
     authorization: {
       authorization_code: string;
       bin: string;
@@ -100,22 +143,53 @@ export type VerificationResponse = {
       email: string;
       customer_code: string;
       phone: string | null;
-      metadata: unknown | null;
       risk_action: string;
       international_format_phone: string | null;
     };
-    plan: unknown | null;
-    split: unknown;
-    order_id: unknown | null;
     paidAt: string;
     createdAt: string;
     requested_amount: number;
-    pos_transaction_data: unknown | null;
-    source: unknown | null;
-    fees_breakdown: unknown | null;
-    connect: unknown | null;
     transaction_date: string;
-    plan_object: unknown;
-    subaccount: unknown;
+  };
+};
+
+export type RefundResponse = PaystackResponse & {
+  data: {
+    transaction: {
+      id: number;
+      domain: string;
+      reference: string;
+      amount: number;
+      paid_at: string;
+      channel: string;
+      currency: string;
+      authorization: {
+        exp_month: string | null;
+        exp_year: string | null;
+        account_name: string | null;
+      };
+      customer: {
+        international_format_phone: string | null;
+      };
+      subaccount: {
+        currency: string | null;
+      };
+      paidAt: string;
+    };
+    integration: number;
+    deducted_amount: number;
+    channel: string | null;
+    merchant_note: string;
+    customer_note: string;
+    status: string;
+    refunded_by: string;
+    expected_at: string;
+    currency: string;
+    domain: string;
+    amount: number;
+    fully_deducted: boolean;
+    id: number;
+    createdAt: string;
+    updatedAt: string;
   };
 };

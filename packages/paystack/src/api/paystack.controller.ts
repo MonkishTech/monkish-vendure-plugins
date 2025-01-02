@@ -13,7 +13,7 @@ import type { Response } from 'express';
 import { loggerCtx, PLUGIN_INIT_OPTIONS } from 'src/constants';
 import { PaystackPluginOptions } from 'src/paystack.plugin';
 import { PaystackService } from 'src/service/paystack.service';
-import { WebhookEvent } from 'src/types';
+import { RefundEvent, TransactionEvent, WebhookEvent } from 'src/types';
 
 @Controller('payments')
 export class PaystackController {
@@ -46,10 +46,21 @@ export class PaystackController {
       return;
     }
 
-    // if(payload.event === 'paymentrequest.success' || payload.event === 'charge.success') {
+    switch (payload.event) {
+      case 'charge.success':
+        this.paystackService.handleSuccessfulCharge(
+          payload as TransactionEvent
+        );
+        break;
+      case 'refund.processed':
+      case 'refund.pending':
+      case 'refund.failed':
+        this.paystackService.handleRefundEvent(payload as RefundEvent);
+        break;
+      default:
+        Logger.warn(`Unhandled event type ${payload.event}`, loggerCtx);
+    }
 
-    // }
-
-    return { received: true };
+    response.status(HttpStatus.OK).send('Ok');
   }
 }

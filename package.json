@@ -39,10 +39,10 @@
   "peerDependencies": {
     "@nestjs/common": "*",
     "@nestjs/graphql": "*",
+    "@types/express": "*",
     "better-sqlite3": "*",
-    "graphql": "*",
-    "graphql-tag": "*",
     "express": "*",
-    "@types/express": "*"
+    "graphql": "*",
+    "graphql-tag": "*"
   }
 }

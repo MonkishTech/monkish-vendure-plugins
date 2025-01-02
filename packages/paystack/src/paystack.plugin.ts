@@ -1,6 +1,8 @@
-import { VendurePlugin } from '@vendure/core';
+import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 import { PLUGIN_INIT_OPTIONS } from './constants';
 import { PaystackService } from './service/paystack.service';
+import { shopApiSchemaExtensions } from './api/extensions';
+import { PaystackResolver } from './api/paystack.resolver';
 
 /**
  * @description
@@ -16,6 +18,8 @@ export interface PaystackPluginOptions {
 }
 
 @VendurePlugin({
+  compatibility: '>1',
+  imports: [PluginCommonModule],
   providers: [
     {
       provide: PLUGIN_INIT_OPTIONS,
@@ -23,6 +27,10 @@ export interface PaystackPluginOptions {
     },
     PaystackService,
   ],
+  shopApiExtensions: {
+    schema: shopApiSchemaExtensions,
+    resolvers: [PaystackResolver],
+  },
 })
 export class PaystackPlugin {
   static options: PaystackPluginOptions;

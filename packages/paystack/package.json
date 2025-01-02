@@ -1,7 +1,17 @@
 {
   "name": "@monkish/vendure-paystack-plugin",
   "version": "0.0.1",
-  "dependencies": {},
+  "dependencies": {
+    "@vendure/admin-ui-plugin": "^3.1.1",
+    "dotenv": "16.4.7",
+    "graphql-tag": "*",
+    "graphql": "*",
+    "@nestjs/graphql": "*"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "*",
+    "@vendure/core": "*"
+  },
   "type": "commonjs",
   "main": "./dist/index.cjs",
   "typings": "./dist/index.d.ts",
@@ -32,6 +42,14 @@
         ],
         "options": {
           "reportsDirectory": "../../coverage/packages/paystack"
+        }
+      },
+      "dev": {
+        "executor": "nx:run-commands",
+        "options": {
+          "commands": [
+            "ts-node packages/paystack/dev-server/index.ts"
+          ]
         }
       }
     },

@@ -26,7 +26,7 @@ import {
   PLUGIN_INIT_OPTIONS,
   SUPPORTED_CURRENCICES,
 } from '../constants';
-import { PaystackPluginOptions } from '../paystack.plugin';
+import type { PaystackPluginOptions } from '../paystack.plugin';
 import {
   ErrorCode,
   PaystackPaymentIntent,
@@ -40,7 +40,9 @@ import {
 } from '../types';
 
 class PaymentIntentError implements PaystackPaymentIntentError {
+  __typename = 'PaystackPaymentIntentError' as const;
   errorCode: ErrorCode = 'ORDER_PAYMENT_STATE_ERROR';
+
   constructor(public message: string) {}
 }
 
@@ -78,12 +80,16 @@ export class PaystackService {
       throw new UserInputError('No active order found for session');
     }
 
-    // TODO: Hydrate session order with customer relation
+    const order = await this.orderService.findOne(ctx, sessionOrder.id, [
+      'customer',
+    ]);
+    if (!order) {
+      // This should never happen
+      throw new UserInputError('No order found for active session');
+    }
 
     const { channels, callbackUrl, metadata } = input;
-    const { totalWithTax, customer, currencyCode, code } = sessionOrder;
-
-    console.log(sessionOrder);
+    const { totalWithTax, customer, currencyCode, code } = order;
 
     if (!customer) {
       throw new UserInputError('No customer found for active order');

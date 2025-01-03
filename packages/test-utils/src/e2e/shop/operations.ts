@@ -1,6 +1,6 @@
-import { shopGraphQL } from '../../generated/types';
+import { graphql } from '../../graphql/shop';
 
-const OrderFragment = shopGraphQL(`
+const OrderFragment = graphql(`
   fragment OrderFields on Order @_unmask {
     id
     code
@@ -52,7 +52,7 @@ const OrderFragment = shopGraphQL(`
   }
 `);
 
-export const AddItemToOrder = shopGraphQL(
+export const AddItemToOrder = graphql(
   `
     mutation AddItemToOrder($productVariantId: ID!, $quantity: Int!) {
       addItemToOrder(productVariantId: $productVariantId, quantity: $quantity) {
@@ -69,7 +69,7 @@ export const AddItemToOrder = shopGraphQL(
   [OrderFragment]
 );
 
-export const ApplyCouponCode = shopGraphQL(
+export const ApplyCouponCode = graphql(
   `
     mutation ApplyCouponCode($couponCode: String!) {
       applyCouponCode(couponCode: $couponCode) {
@@ -86,7 +86,7 @@ export const ApplyCouponCode = shopGraphQL(
   [OrderFragment]
 );
 
-export const SetShippingAddress = shopGraphQL(
+export const SetShippingAddress = graphql(
   `
     mutation SetShippingAddress($input: CreateAddressInput!) {
       setOrderShippingAddress(input: $input) {
@@ -99,7 +99,7 @@ export const SetShippingAddress = shopGraphQL(
   [OrderFragment]
 );
 
-export const SetBillingAddress = shopGraphQL(
+export const SetBillingAddress = graphql(
   `
     mutation SetBillingAddress($input: CreateAddressInput!) {
       setOrderBillingAddress(input: $input) {
@@ -112,7 +112,7 @@ export const SetBillingAddress = shopGraphQL(
   [OrderFragment]
 );
 
-export const SetShippingMethod = shopGraphQL(
+export const SetShippingMethod = graphql(
   `
     mutation SetShippingMethod($ids: [ID!]!) {
       setOrderShippingMethod(shippingMethodId: $ids) {
@@ -125,7 +125,7 @@ export const SetShippingMethod = shopGraphQL(
   `
 );
 
-export const TransitionToState = shopGraphQL(
+export const TransitionToState = graphql(
   `
     mutation TransitionToState($state: String!) {
       transitionOrderToState(state: $state) {
@@ -139,7 +139,7 @@ export const TransitionToState = shopGraphQL(
   `
 );
 
-export const AddPaymentToOrder = shopGraphQL(
+export const AddPaymentToOrder = graphql(
   `
     mutation AddPaymentToOrder($input: PaymentInput!) {
       addPaymentToOrder(input: $input) {
@@ -155,3 +155,12 @@ export const AddPaymentToOrder = shopGraphQL(
   `,
   [OrderFragment]
 );
+
+export const GetActiveChannel = graphql(`
+  query GetActiveChannel {
+    activeChannel {
+      id
+      currencyCode
+    }
+  }
+`);

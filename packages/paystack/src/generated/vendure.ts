@@ -11825,31 +11825,31 @@ const introspection = {
         "name": "PaystackPaymentChannel",
         "enumValues": [
           {
-            "name": "CARD",
+            "name": "card",
             "isDeprecated": false
           },
           {
-            "name": "BANK",
+            "name": "bank",
             "isDeprecated": false
           },
           {
-            "name": "USSD",
+            "name": "ussd",
             "isDeprecated": false
           },
           {
-            "name": "QR",
+            "name": "qr",
             "isDeprecated": false
           },
           {
-            "name": "MOBILE_MONEY",
+            "name": "mobile_money",
             "isDeprecated": false
           },
           {
-            "name": "BANK_TRANSFER",
+            "name": "bank_transfer",
             "isDeprecated": false
           },
           {
-            "name": "EFT",
+            "name": "eft",
             "isDeprecated": false
           }
         ]
@@ -11983,8 +11983,11 @@ const introspection = {
           {
             "name": "callbackUrl",
             "type": {
-              "kind": "SCALAR",
-              "name": "String"
+              "kind": "NON_NULL",
+              "ofType": {
+                "kind": "SCALAR",
+                "name": "String"
+              }
             }
           },
           {

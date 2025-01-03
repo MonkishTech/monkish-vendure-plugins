@@ -23,6 +23,7 @@
  * ```
  */
 const introspection = {
+  "name": "admin-api",
   "__schema": {
     "queryType": {
       "name": "Query"

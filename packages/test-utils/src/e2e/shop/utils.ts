@@ -1,11 +1,12 @@
 import { ErrorResult, ID } from '@vendure/core';
-import { SimpleGraphQLClient } from '@vendure/testing';
+import { QueryParams, SimpleGraphQLClient } from '@vendure/testing';
 import { testPaymentMethod } from '../test-payment-method';
 import { ResultOf, VariablesOf } from 'gql.tada';
 import {
   AddItemToOrder,
   AddPaymentToOrder,
   ApplyCouponCode,
+  GetActiveChannel,
   SetBillingAddress,
   SetShippingAddress,
   SetShippingMethod,
@@ -88,12 +89,17 @@ export async function addPaymentToOrder(
 export async function addItem(
   shopClient: SimpleGraphQLClient,
   variantId: ID,
-  quantity: number
+  quantity: number,
+  queryParams?: QueryParams
 ): Promise<ResultOf<typeof AddItemToOrder>['addItemToOrder']> {
-  const { addItemToOrder } = await shopClient.query(AddItemToOrder, {
-    productVariantId: variantId,
-    quantity,
-  });
+  const { addItemToOrder } = await shopClient.query(
+    AddItemToOrder,
+    {
+      productVariantId: variantId,
+      quantity,
+    },
+    queryParams
+  );
 
   return addItemToOrder;
 }
@@ -168,4 +174,11 @@ export async function createSettledOrder(
     );
   }
   return order as SettledOrder;
+}
+
+export async function getActiveChannel(
+  shopClient: SimpleGraphQLClient
+): Promise<ResultOf<typeof GetActiveChannel>['activeChannel']> {
+  const { activeChannel } = await shopClient.query(GetActiveChannel);
+  return activeChannel;
 }

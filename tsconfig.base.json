@@ -30,12 +30,6 @@
     "sourceMap": false,
     "strict": true,
     "target": "es2022",
-    "verbatimModuleSyntax": false,
-    "plugins": [
-      {
-        "name": "gql.tada/ts-plugin",
-        "schema": "http://localhost:3000/shop-api"
-      }
-    ]
+    "verbatimModuleSyntax": false
   }
 }

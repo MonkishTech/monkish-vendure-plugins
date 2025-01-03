@@ -11,9 +11,9 @@ import { Logger } from '@vendure/core';
 import { createHmac } from 'crypto';
 import type { Response } from 'express';
 import { loggerCtx, PLUGIN_INIT_OPTIONS } from '../constants';
-import { PaystackPluginOptions } from '../paystack.plugin';
+import type { PaystackPluginOptions } from '../paystack.plugin';
 import { PaystackService } from '../service/paystack.service';
-import { RefundEvent, TransactionEvent, WebhookEvent } from '../types';
+import type { RefundEvent, TransactionEvent, WebhookEvent } from '../types';
 
 @Controller('payments')
 export class PaystackController {

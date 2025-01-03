@@ -23,6 +23,7 @@
  * ```
  */
 const introspection = {
+  "name": "shop-api",
   "__schema": {
     "queryType": {
       "name": "Query"

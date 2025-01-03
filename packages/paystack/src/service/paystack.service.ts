@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { RefundOrderInput } from '@vendure/common/lib/generated-types';
 import {
   ActiveOrderService,
   ChannelService,
@@ -17,15 +18,14 @@ import {
   TransactionalConnection,
   UserInputError,
 } from '@vendure/core';
-import { RefundOrderInput } from '@vendure/common/lib/generated-types';
 import axios, { AxiosError, AxiosInstance } from 'axios';
-import { paystackPaymentMethodHandler } from 'src/config/paystack.handler';
+import { paystackPaymentMethodHandler } from '../config/paystack.handler';
 import {
   loggerCtx,
   PLUGIN_INIT_OPTIONS,
   SUPPORTED_CURRENCICES,
-} from 'src/constants';
-import { PaystackPluginOptions } from 'src/paystack.plugin';
+} from '../constants';
+import { PaystackPluginOptions } from '../paystack.plugin';
 import {
   ErrorCode,
   PaystackPaymentIntent,
@@ -36,7 +36,7 @@ import {
   RefundResponse,
   TransactionEvent,
   VerificationResponse,
-} from 'src/types';
+} from '../types';
 
 class PaymentIntentError implements PaystackPaymentIntentError {
   errorCode: ErrorCode = 'ORDER_PAYMENT_STATE_ERROR';

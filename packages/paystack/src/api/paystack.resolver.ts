@@ -6,13 +6,13 @@ import {
   RequestContext,
   UnauthorizedError,
 } from '@vendure/core';
-import { PaystackService } from 'src/service/paystack.service';
+import { PaystackService } from '../service/paystack.service';
 import {
   PaystackPaymentIntent,
   PaystackPaymentIntentError,
   PaystackPaymentIntentInput,
   PaystackPaymentIntentResult,
-} from 'src/types';
+} from '../types';
 
 @Resolver()
 export class PaystackResolver {

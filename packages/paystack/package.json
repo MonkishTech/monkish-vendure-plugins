@@ -9,10 +9,12 @@
     "@nestjs/common": "*",
     "@vendure/admin-ui-plugin": "*",
     "@vendure/core": "*",
+    "@vendure/common": "*",
     "gql.tada": "*",
     "dotenv": "*",
     "graphql-tag": "*",
-    "graphql": "*"
+    "graphql": "*",
+    "express": "*"
   },
   "type": "commonjs",
   "main": "./dist/index.cjs",

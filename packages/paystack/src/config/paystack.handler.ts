@@ -6,7 +6,7 @@ import {
   PaymentMethodHandler,
   SettlePaymentResult,
 } from '@vendure/core';
-import { PaystackService } from 'src/service/paystack.service';
+import { PaystackService } from '../service/paystack.service';
 
 let paystackService: PaystackService;
 

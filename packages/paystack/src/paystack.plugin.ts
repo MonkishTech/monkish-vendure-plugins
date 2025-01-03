@@ -4,6 +4,7 @@ import { PaystackService } from './service/paystack.service';
 import { shopApiSchemaExtensions } from './api/extensions';
 import { PaystackResolver } from './api/paystack.resolver';
 import { PaystackController } from './api/paystack.controller';
+import { configuration } from './config/runtime-config';
 
 /**
  * @description
@@ -33,6 +34,7 @@ export interface PaystackPluginOptions {
     schema: shopApiSchemaExtensions,
     resolvers: [PaystackResolver],
   },
+  configuration,
 })
 export class PaystackPlugin {
   static options: PaystackPluginOptions;

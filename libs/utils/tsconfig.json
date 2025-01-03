@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "files": [],
+  "include": [],
+  "references": [
+    {
+      "path": "./tsconfig.lib.json"
+    },
+    {
+      "path": "./tsconfig.spec.json"
+    }
+  ],
+  "compilerOptions": {
+    "plugins": [ 
+      {
+        "name": "gql.tada/ts-plugin", 
+        "schema": "./src/e2e/generated/shop-schema.json", 
+        "tadaOutputLocation": "./src/e2e/generated/vendure.ts"
+      } 
+    ],
+  }
+}

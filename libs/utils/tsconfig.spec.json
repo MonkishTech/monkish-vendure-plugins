@@ -1,7 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "../../",
     "outDir": "./out-tsc/vitest",
     "types": [
       "vitest/globals",
@@ -24,9 +23,7 @@
     "src/**/*.spec.js",
     "src/**/*.test.jsx",
     "src/**/*.spec.jsx",
-    "e2e/**/*.test.ts",
-    "e2e/**/*.spec.ts",
-    "../../libs/utils/src/index.ts",
+    "src/**/*.d.ts"
   ],
   "references": [
     {

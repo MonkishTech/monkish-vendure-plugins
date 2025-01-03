@@ -10,10 +10,10 @@ import {
 import { Logger } from '@vendure/core';
 import { createHmac } from 'crypto';
 import type { Response } from 'express';
-import { loggerCtx, PLUGIN_INIT_OPTIONS } from 'src/constants';
-import { PaystackPluginOptions } from 'src/paystack.plugin';
-import { PaystackService } from 'src/service/paystack.service';
-import { RefundEvent, TransactionEvent, WebhookEvent } from 'src/types';
+import { loggerCtx, PLUGIN_INIT_OPTIONS } from '../constants';
+import { PaystackPluginOptions } from '../paystack.plugin';
+import { PaystackService } from '../service/paystack.service';
+import { RefundEvent, TransactionEvent, WebhookEvent } from '../types';
 
 @Controller('payments')
 export class PaystackController {

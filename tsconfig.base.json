@@ -15,7 +15,7 @@
     "isolatedModules": true,
     "lib": ["es2022"],
     "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "moduleResolution": "node16",
     "noEmitOnError": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
@@ -36,5 +36,8 @@
         "schema": "http://localhost:3000/shop-api"
       } 
     ],
+    "paths": {
+      "@workspace/utils": ["./libs/utils/src/index.ts"]
+    }
   }
 }

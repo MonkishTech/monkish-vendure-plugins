@@ -2,11 +2,12 @@
   "compilerOptions": {
     "allowJs": false,
     "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
     "composite": true,
     "declaration": true,
     "declarationMap": true,
     "emitDeclarationOnly": true,
-    "emitDecoratorMetadata": false,
+    "emitDecoratorMetadata": true,
     "esModuleInterop": true,
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
@@ -30,14 +31,11 @@
     "strict": true,
     "target": "es2022",
     "verbatimModuleSyntax": false,
-    "plugins": [ 
+    "plugins": [
       {
-        "name": "gql.tada/ts-plugin", 
+        "name": "gql.tada/ts-plugin",
         "schema": "http://localhost:3000/shop-api"
-      } 
-    ],
-    "paths": {
-      "@workspace/utils": ["./libs/utils/src/index.ts"]
-    }
+      }
+    ]
   }
 }

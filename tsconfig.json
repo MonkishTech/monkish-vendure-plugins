@@ -7,7 +7,7 @@
       "path": "./packages/paystack"
     },
     {
-      "path": "./libs/utils"
+      "path": "./packages/test-utils"
     }
   ]
 }

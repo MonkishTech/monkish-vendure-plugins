@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "files": [],
+  "include": [],
+  "references": [
+    {
+      "path": "./tsconfig.lib.json"
+    }
+  ],
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "gql.tada/ts-plugin",
+        "schema": "./src/generated/shop-schema.json",
+        "tadaOutputLocation": "./src/generated/shop-api.ts"
+      },
+      {
+        "name": "gql.tada/ts-plugin",
+        "schema": "./src/generated/admin-schema.json",
+        "tadaOutputLocation": "./src/generated/admin-api.ts"
+      }
+    ]
+  }
+}

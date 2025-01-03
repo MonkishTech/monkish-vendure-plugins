@@ -78,8 +78,12 @@ export class PaystackService {
       throw new UserInputError('No active order found for session');
     }
 
+    // TODO: Hydrate session order with customer relation
+
     const { channels, callbackUrl, metadata } = input;
     const { totalWithTax, customer, currencyCode, code } = sessionOrder;
+
+    console.log(sessionOrder);
 
     if (!customer) {
       throw new UserInputError('No customer found for active order');

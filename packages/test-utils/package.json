@@ -1,0 +1,12 @@
+{
+  "name": "@workspace/test-utils",
+  "version": "0.0.1",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "private": true,
+  "nx": {
+    "sourceRoot": "packages/test-utils/src",
+    "projectType": "library",
+    "name": "test-utils"
+  }
+}

@@ -11,12 +11,12 @@
     }
   ],
   "compilerOptions": {
-    "plugins": [ 
+    "plugins": [
       {
-        "name": "gql.tada/ts-plugin", 
-        "schema": "http://localhost:3000/shop-api", 
+        "name": "gql.tada/ts-plugin",
+        "schema": "http://localhost:3000/shop-api",
         "tadaOutputLocation": "./src/generated/vendure.ts"
-      } 
-    ],
+      }
+    ]
   }
 }

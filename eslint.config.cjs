@@ -14,7 +14,10 @@ module.exports = [
         'error',
         {
           enforceBuildableLibDependency: true,
-          allow: ['^.*/eslint(\\.base)?\\.config\\.[cm]?js$'],
+          allow: [
+            '^.*/eslint(\\.base)?\\.config\\.[cm]?js$',
+            '@workspace/test-utils',
+          ],
           depConstraints: [
             {
               sourceTag: '*',

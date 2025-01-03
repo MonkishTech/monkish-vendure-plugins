@@ -1,4 +1,4 @@
-import { ErrorResult } from '@vendure/core';
+import { ErrorResult, ID } from '@vendure/core';
 import { SimpleGraphQLClient } from '@vendure/testing';
 import { testPaymentMethod } from '../test-payment-method';
 import { ResultOf, VariablesOf } from 'gql.tada';
@@ -87,7 +87,7 @@ export async function addPaymentToOrder(
  */
 export async function addItem(
   shopClient: SimpleGraphQLClient,
-  variantId: string,
+  variantId: ID,
   quantity: number
 ): Promise<ResultOf<typeof AddItemToOrder>['addItemToOrder']> {
   const { addItemToOrder } = await shopClient.query(AddItemToOrder, {

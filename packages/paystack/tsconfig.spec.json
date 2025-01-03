@@ -24,8 +24,7 @@
     "src/**/*.spec.js",
     "src/**/*.test.jsx",
     "src/**/*.spec.jsx",
-    "e2e/**/*.test.ts",
-    "e2e/**/*.spec.ts",
+    "e2e/**/*.ts",
     "../../libs/utils/src/index.ts",
   ],
   "references": [

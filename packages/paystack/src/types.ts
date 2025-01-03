@@ -1,6 +1,6 @@
 import { initGraphQLTada, ResultOf, VariablesOf } from 'gql.tada';
 import type { introspection } from './generated/vendure';
-import { CreatePaystackPaymentIntentMutation } from './graphql/operations';
+import { CreatePaystackPaymentIntent } from './graphql/operations';
 
 export const graphql = initGraphQLTada<{
   introspection: typeof introspection;
@@ -16,11 +16,11 @@ export type ErrorCode = ReturnType<typeof graphql.scalar<'ErrorCode'>>;
 export type CurrencyCode = ReturnType<typeof graphql.scalar<'CurrencyCode'>>;
 
 export type PaystackPaymentIntentInput = VariablesOf<
-  typeof CreatePaystackPaymentIntentMutation
+  typeof CreatePaystackPaymentIntent
 >['input'];
 
 export type PaystackPaymentIntentResult = ResultOf<
-  typeof CreatePaystackPaymentIntentMutation
+  typeof CreatePaystackPaymentIntent
 >['createPaystackPaymentIntent'];
 
 export type PaystackPaymentIntent = Extract<

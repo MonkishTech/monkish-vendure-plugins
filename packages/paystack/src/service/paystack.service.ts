@@ -22,6 +22,7 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import { paystackPaymentMethodHandler } from '../config/paystack.handler';
 import {
   loggerCtx,
+  PAYSTACK_API_URL,
   PLUGIN_INIT_OPTIONS,
   SUPPORTED_CURRENCICES,
 } from '../constants';
@@ -57,7 +58,7 @@ export class PaystackService {
     private requestContextService: RequestContextService
   ) {
     this.paystackApiClient = axios.create({
-      baseURL: 'https://api.paystack.co',
+      baseURL: PAYSTACK_API_URL,
       headers: {
         Authorization: `Bearer ${this.pluginOptions.secretKey}`,
       },

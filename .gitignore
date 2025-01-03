@@ -46,3 +46,9 @@ vitest.config.*.timestamp*
 
 .env
 *.sqlite
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions

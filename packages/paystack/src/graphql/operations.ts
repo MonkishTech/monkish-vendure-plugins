@@ -1,6 +1,6 @@
 import { graphql } from '../types';
 
-export const CreatePaystackPaymentIntentMutation = graphql(`
+export const CreatePaystackPaymentIntent = graphql(`
   mutation CreatePaystackPaymentIntent($input: PaystackPaymentIntentInput!) {
     createPaystackPaymentIntent(input: $input) {
       ... on PaystackPaymentIntent {

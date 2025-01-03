@@ -17,7 +17,7 @@ export const shopApiSchemaExtensions: DocumentNode = graphql`
     Fully qualified url, e.g. https://example.com/.
     Use this to override the callback url provided on the dashboard for this transaction.
     """
-    callbackUrl: String
+    callbackUrl: String!
 
     """
     An array of payment channels to control what channels you want to make available

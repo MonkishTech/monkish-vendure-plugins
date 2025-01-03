@@ -1,14 +1,6 @@
 {
   "name": "@workspace/utils",
   "version": "0.0.1",
-  "dependencies": {},
-  "peerDependencies": {
-    "@vendure/core": "*",
-    "@vendure/common": "*",
-    "@vendure/testing": "*",
-    "gql.tada": "*",
-    "typeorm": "*"
-  },
   "type": "commonjs",
   "main": "./dist/index.cjs",
   "typings": "./dist/index.d.ts",
@@ -43,5 +35,12 @@
       }
     },
     "name": "utils"
+  },
+  "peerDependencies": {
+    "@vendure/common": "*",
+    "@vendure/core": "*",
+    "@vendure/testing": "*",
+    "gql.tada": "*",
+    "typeorm": "*"
   }
 }

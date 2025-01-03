@@ -1,10 +1,19 @@
 import path from 'path';
+import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   root: __dirname,
   cacheDir: '../../node_modules/.vite/packages/paystack',
-  plugins: [],
+  plugins: [
+    swc.vite({
+      jsc: {
+        transform: {
+          useDefineForClassFields: false,
+        },
+      },
+    }),
+  ],
   resolve: {
     alias: {
       '@workspace/utils': path.resolve(__dirname, '../../libs/utils/src'),

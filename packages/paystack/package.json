@@ -5,16 +5,16 @@
     "axios": "^1.7.9"
   },
   "peerDependencies": {
-    "@nestjs/graphql": "*",
     "@nestjs/common": "*",
+    "@nestjs/graphql": "*",
     "@vendure/admin-ui-plugin": "*",
-    "@vendure/core": "*",
     "@vendure/common": "*",
-    "gql.tada": "*",
+    "@vendure/core": "*",
     "dotenv": "*",
-    "graphql-tag": "*",
+    "express": "*",
+    "gql.tada": "*",
     "graphql": "*",
-    "express": "*"
+    "graphql-tag": "*"
   },
   "type": "commonjs",
   "main": "./dist/index.cjs",

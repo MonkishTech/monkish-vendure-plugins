@@ -6,8 +6,20 @@ module.exports = [
     files: ['**/*.json'],
     rules: {
       '@nx/dependency-checks': [
-        'warn',
+        'error',
         {
+          ignoredDependencies: [
+            '@nestjs/common',
+            '@nestjs/graphql',
+            'express',
+            '@vendure/core',
+            '@vendure/admin-ui-plugin',
+            '@vendure/common',
+            'dotenv',
+            'graphql',
+            'graphql-tag',
+            'gql.tada',
+          ],
           ignoredFiles: [
             '{projectRoot}/eslint.config.{js,cjs,mjs}',
             '{projectRoot}/vite.config.{js,ts,mjs,mts}',

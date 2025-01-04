@@ -4,59 +4,7 @@
   "dependencies": {
     "axios": "^1.7.9"
   },
-  "peerDependencies": {
-    "@nestjs/common": "*",
-    "@nestjs/graphql": "*",
-    "@vendure/admin-ui-plugin": "*",
-    "@vendure/common": "*",
-    "@vendure/core": "*",
-    "dotenv": "*",
-    "express": "*",
-    "gql.tada": "*",
-    "graphql": "*",
-    "graphql-tag": "*"
-  },
   "type": "commonjs",
   "main": "./dist/index.cjs",
-  "typings": "./dist/index.d.ts",
-  "private": true,
-  "nx": {
-    "sourceRoot": "packages/paystack/src",
-    "projectType": "library",
-    "targets": {
-      "build": {
-        "executor": "@nx/esbuild:esbuild",
-        "outputs": [
-          "{options.outputPath}"
-        ],
-        "options": {
-          "outputPath": "packages/paystack/dist",
-          "main": "packages/paystack/src/index.ts",
-          "tsConfig": "packages/paystack/tsconfig.lib.json",
-          "format": [
-            "cjs"
-          ],
-          "declarationRootDir": "packages/paystack/src"
-        }
-      },
-      "test": {
-        "executor": "@nx/vite:test",
-        "outputs": [
-          "{options.reportsDirectory}"
-        ],
-        "options": {
-          "reportsDirectory": "../../coverage/packages/paystack"
-        }
-      },
-      "dev": {
-        "executor": "nx:run-commands",
-        "options": {
-          "commands": [
-            "ts-node packages/paystack/dev-server/index.ts"
-          ]
-        }
-      }
-    },
-    "name": "paystack"
-  }
+  "typings": "./dist/index.d.ts"
 }

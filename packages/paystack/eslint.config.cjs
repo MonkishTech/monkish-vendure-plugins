@@ -15,10 +15,12 @@ module.exports = [
             '@vendure/core',
             '@vendure/admin-ui-plugin',
             '@vendure/common',
+            '@vendure/testing',
             'dotenv',
             'graphql',
             'graphql-tag',
             'gql.tada',
+            'nock',
           ],
           ignoredFiles: [
             '{projectRoot}/eslint.config.{js,cjs,mjs}',

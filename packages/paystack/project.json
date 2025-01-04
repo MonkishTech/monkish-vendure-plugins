@@ -14,9 +14,8 @@
     },
     "test": {
       "executor": "@nx/vite:test",
-      "outputs": ["{options.reportsDirectory}"],
       "options": {
-        "reportsDirectory": "../../coverage/packages/paystack"
+        "config": "vitest.config.mts"
       }
     },
     "dev": {

@@ -3689,17 +3689,6 @@ __metadata:
   resolution: "@monkish/vendure-paystack-plugin@workspace:packages/paystack"
   dependencies:
     axios: "npm:^1.7.9"
-  peerDependencies:
-    "@nestjs/common": "*"
-    "@nestjs/graphql": "*"
-    "@vendure/admin-ui-plugin": "*"
-    "@vendure/common": "*"
-    "@vendure/core": "*"
-    dotenv: "*"
-    express: "*"
-    gql.tada: "*"
-    graphql: "*"
-    graphql-tag: "*"
   languageName: unknown
   linkType: soft
 

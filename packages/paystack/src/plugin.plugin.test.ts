@@ -1,6 +1,11 @@
 import nock from 'nock';
 import path from 'path';
-import { createTestEnvironment } from '@vendure/testing';
+import { rm } from 'node:fs/promises';
+import {
+  createTestEnvironment,
+  registerInitializer,
+  SqljsInitializer,
+} from '@vendure/testing';
 import { PaystackPlugin } from './paystack.plugin';
 import {
   initialData,
@@ -9,7 +14,7 @@ import {
   getCustomerList,
   updateChannel,
   getActiveChannel,
-} from '@workspace/test-utils';
+} from '~utils';
 import { PAYSTACK_API_URL } from '../src/constants';
 import { CreatePaystackPaymentIntent } from '../src/graphql/operations';
 import { PaystackPaymentIntent } from './types';
@@ -26,6 +31,8 @@ export const mockInitializeTransactionResponse: Omit<
     reference: 're4lyvq3s3',
   },
 };
+
+const TEST_DB_DIR = path.join(__dirname, '../__test_db__');
 
 describe('PaystackPlugin', () => {
   const { server, adminClient, shopClient } = createTestEnvironment({
@@ -44,10 +51,12 @@ describe('PaystackPlugin', () => {
   let started = false;
 
   beforeAll(async () => {
+    registerInitializer('sqljs', new SqljsInitializer(TEST_DB_DIR));
+
     await server.init({
       productsCsvPath: path.join(
         __dirname,
-        '../../test-utils/src/e2e/products.csv'
+        '../../../utils/src/e2e/products.csv'
       ),
       initialData: initialData,
       customerCount: 2,
@@ -56,6 +65,7 @@ describe('PaystackPlugin', () => {
     started = true;
 
     await adminClient.asSuperAdmin();
+
     customer = (await getCustomerList(adminClient, { take: 2 })).customers
       .items[0] as typeof customer;
     const activeChannel = await getActiveChannel(shopClient);
@@ -68,6 +78,7 @@ describe('PaystackPlugin', () => {
 
   afterAll(async () => {
     await server.destroy();
+    rm(TEST_DB_DIR, { recursive: true });
   });
 
   afterEach(() => {

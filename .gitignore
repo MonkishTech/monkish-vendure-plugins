@@ -52,3 +52,4 @@ vitest.config.*.timestamp*
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+__test_db__

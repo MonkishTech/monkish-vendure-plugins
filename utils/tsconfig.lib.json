@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": ".",
     "rootDir": "src",
@@ -7,6 +7,7 @@
     "tsBuildInfoFile": "dist/tsconfig.lib.tsbuildinfo",
     "emitDeclarationOnly": false,
     "moduleResolution": "nodenext",
+    "importHelpers": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],

@@ -1,12 +1,5 @@
 import { mergeConfig } from '@vendure/core';
-import {
-  MysqlInitializer,
-  PostgresInitializer,
-  registerInitializer,
-  SqljsInitializer,
-  testConfig as defaultTestConfig,
-} from '@vendure/testing';
-import path from 'path';
+import { testConfig as defaultTestConfig } from '@vendure/testing';
 import { DataSourceOptions } from 'typeorm';
 
 /**
@@ -17,14 +10,6 @@ import { DataSourceOptions } from 'typeorm';
 export const TEST_SETUP_TIMEOUT_MS = process.env.E2E_DEBUG
   ? 1800 * 1000
   : 120000;
-
-registerInitializer(
-  'sqljs',
-  new SqljsInitializer(path.join(__dirname, '__sqlite-data__'))
-);
-registerInitializer('postgres', new PostgresInitializer());
-registerInitializer('mysql', new MysqlInitializer());
-registerInitializer('mariadb', new MysqlInitializer());
 
 export const testConfig = (port: number) => {
   return mergeConfig(defaultTestConfig, {

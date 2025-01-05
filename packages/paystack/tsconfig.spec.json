@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": ".",
     "outDir": "./out-tsc/vitest",
     "types": [
       "vitest/globals",
@@ -8,9 +9,15 @@
       "vite/client",
       "node",
       "vitest"
-    ]
+    ],
+    "paths": {
+      "~utils": ["../../utils/src/index.ts"]
+    }
   },
   "references": [
+    {
+      "path": "../../utils/tsconfig.lib.json"
+    },
     {
       "path": "./tsconfig.lib.json"
     }

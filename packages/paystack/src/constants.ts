@@ -1,4 +1,7 @@
 import { CurrencyCode } from './types';
+import { initialData } from '~utils';
+
+const test = initialData;
 
 export const loggerCtx = 'PaystackPlugin';
 export const PLUGIN_INIT_OPTIONS = Symbol('PLUGIN_INIT_OPTIONS');

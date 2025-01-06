@@ -23,6 +23,13 @@
       "options": {
         "commands": ["ts-node packages/paystack/dev-server/index.ts"]
       }
+    },
+    "publish-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "packages/paystack",
+        "commands": ["yarn npm publish"]
+      }
     }
   }
 }

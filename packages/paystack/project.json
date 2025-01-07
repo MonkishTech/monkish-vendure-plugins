@@ -1,0 +1,32 @@
+{
+  "name": "paystack",
+  "sourceRoot": "packages/paystack/src",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "options": {
+        "rootDir": "packages/paystack/src",
+        "outputPath": "packages/paystack/dist",
+        "main": "packages/paystack/src/index.ts",
+        "tsConfig": "packages/paystack/tsconfig.lib.json"
+      }
+    },
+    "test": {
+      "executor": "@nx/vite:test"
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["ts-node packages/paystack/dev-server/index.ts"]
+      }
+    },
+    "publish-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "packages/paystack",
+        "commands": ["yarn npm publish"]
+      }
+    }
+  }
+}

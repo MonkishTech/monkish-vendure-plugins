@@ -1,18 +1,65 @@
 {
-  "name": "@monkish-vendure-plugins/source",
+  "name": "@workspace/root",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
-  "private": true,
-  "dependencies": {},
   "devDependencies": {
+    "@changesets/cli": "^2.27.11",
+    "@eslint/js": "^9.8.0",
+    "@nx/eslint": "20.3.0",
+    "@nx/eslint-plugin": "20.3.0",
     "@nx/js": "20.3.0",
+    "@nx/vite": "20.3.0",
+    "@nx/web": "20.3.0",
     "@swc-node/register": "~1.9.1",
-    "@swc/core": "~1.5.7",
+    "@swc/core": "^1.10.4",
     "@swc/helpers": "~0.5.11",
+    "@types/node": "18.16.9",
+    "@vendure/admin-ui-plugin": "^3.1.1",
+    "@vendure/asset-server-plugin": "^3.1.1",
+    "@vendure/core": "^3.1.1",
+    "@vendure/testing": "^3.1.1",
+    "@vendure/ui-devkit": "^3.1.1",
+    "@vitest/coverage-v8": "^2.1.8",
+    "@vitest/ui": "^1.3.1",
+    "better-sqlite3": "^11.7.0",
+    "eslint": "^9.8.0",
+    "eslint-config-prettier": "^9.0.0",
+    "gql.tada": "^1.8.10",
+    "jsdom": "~22.1.0",
+    "nock": "^13.5.6",
     "nx": "20.3.0",
     "prettier": "^2.6.2",
+    "ts-node": "^10.9.2",
     "tslib": "^2.3.0",
-    "typescript": "~5.6.2"
-  }
+    "typescript": "~5.6.2",
+    "typescript-eslint": "^8.13.0",
+    "unplugin-swc": "^1.5.1",
+    "verdaccio": "^5.0.4",
+    "vite": "^5.0.0",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^1.3.1"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "packageManager": "yarn@4.6.0",
+  "scripts": {
+    "release": "nx affected -t build --parallel=5 && changeset publish"
+  },
+  "nx": {
+    "includedScripts": [
+      "local-registry"
+    ],
+    "targets": {
+      "local-registry": {
+        "executor": "@nx/js:verdaccio",
+        "options": {
+          "port": 4873,
+          "config": ".verdaccio/config.yml",
+          "storage": "tmp/local-registry/storage"
+        }
+      }
+    }
+  },
+  "dependencies": {}
 }

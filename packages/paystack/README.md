@@ -1,6 +1,11 @@
+![Vendure Paystack Plugin](https://raw.githubusercontent.com/MonkishTech/monkish-vendure-plugins/main/assets/vendure-paystack-logo.png)
+
 # Paystack Vendure Plugin
 
-Plugin to enable payments through [Paystack](https://paystack.com/).
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/MonkishTech/monkish-vendure-plugins/ci.yml)
+&nbsp; ![NPM Version](https://img.shields.io/npm/v/@monkish/vendure-paystack-plugin)
+
+Enable payments through [Paystack](https://paystack.com/).
 
 ## Installation
 

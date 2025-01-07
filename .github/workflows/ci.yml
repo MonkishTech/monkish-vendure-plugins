@@ -32,11 +32,4 @@ jobs:
 
       - uses: nrwl/nx-set-shas@v4
 
-      # Enable Nx Cloud task distribution if needed
-      # - run: yarn dlx nx-cloud start-ci-run --distribute-on="3 linux-medium-js" --stop-agents-after="build"
-
-      # Record commands with Nx Cloud (optional)
-      # - run: yarn nx-cloud record -- echo Hello World
-
-      # Nx Affected runs only tasks affected by the changes in this PR/commit
       - run: yarn nx affected -t lint test build

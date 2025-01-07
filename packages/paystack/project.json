@@ -13,10 +13,7 @@
       }
     },
     "test": {
-      "executor": "@nx/vite:test",
-      "options": {
-        "config": "vitest.config.mts"
-      }
+      "executor": "@nx/vite:test"
     },
     "dev": {
       "executor": "nx:run-commands",

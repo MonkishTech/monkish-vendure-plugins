@@ -3,6 +3,8 @@ import { defineConfig } from 'vitest/config';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
+  root: __dirname,
+  cacheDir: '../../node_modules/.vite/packages/paystack',
   plugins: [
     tsconfigPaths(),
     swc.vite({

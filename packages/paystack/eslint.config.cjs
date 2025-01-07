@@ -21,6 +21,9 @@ module.exports = [
             'graphql-tag',
             'gql.tada',
             'nock',
+            'vite-tsconfig-paths',
+            'unplugin-swc',
+            'vitest',
           ],
           ignoredFiles: [
             '{projectRoot}/eslint.config.{js,cjs,mjs}',

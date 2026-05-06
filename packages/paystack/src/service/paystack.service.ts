@@ -26,6 +26,7 @@ import { paystackPaymentMethodHandler } from '../config/paystack.handler';
 import {
   loggerCtx,
   PAYSTACK_API_URL,
+  PAYSTACK_ORDER_CODE_METADATA_KEY,
   SUPPORTED_CURRENCICES,
 } from '../constants';
 import {
@@ -176,7 +177,10 @@ export class PaystackService {
       metadata !== null
         ? (metadata as Record<string, unknown>)
         : {};
-    const mergedMetadata = userMeta;
+    const mergedMetadata = {
+      ...userMeta,
+      [PAYSTACK_ORDER_CODE_METADATA_KEY]: code,
+    };
 
     try {
       const client = this.createPaystackClient(secretKey);
@@ -186,7 +190,6 @@ export class PaystackService {
           amount: amountToCharge,
           email: customer.emailAddress,
           currency: currencyCode,
-          reference: code,
           callback_url: callbackUrl,
           metadata: mergedMetadata,
           channels,
@@ -339,7 +342,27 @@ export class PaystackService {
     const outerCtx = await this.createContext();
 
     this.connection.withTransaction(outerCtx, async (ctx: RequestContext) => {
-      const order = await this.orderService.findOneByCode(ctx, event.data.reference);
+      const meta = event.data.metadata;
+      const orderCode =
+        meta &&
+        typeof meta === 'object' &&
+        !Array.isArray(meta) &&
+        typeof (meta as Record<string, unknown>)[
+          PAYSTACK_ORDER_CODE_METADATA_KEY
+        ] === 'string'
+          ? String(
+              (meta as Record<string, unknown>)[PAYSTACK_ORDER_CODE_METADATA_KEY]
+            )
+          : undefined;
+      if (!orderCode) {
+        Logger.error(
+          `Paystack charge.success missing ${PAYSTACK_ORDER_CODE_METADATA_KEY} in metadata (reference ${event.data.reference})`,
+          loggerCtx
+        );
+        return;
+      }
+
+      const order = await this.orderService.findOneByCode(ctx, orderCode);
       if (!order) return;
 
       if (order.state !== 'ArrangingPayment') {

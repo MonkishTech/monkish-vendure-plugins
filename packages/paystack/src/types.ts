@@ -60,7 +60,7 @@ export type TransactionEvent = WebhookEvent & {
     channel: string;
     currency: string;
     ip_address: string;
-    metadata: number | null;
+    metadata: Record<string, unknown> | null;
     fees: number | null;
     customer: {
       id: number;

@@ -1,5 +1,12 @@
 # @monkish/vendure-paystack-plugin
 
+## 0.0.2
+
+### Patch Changes
+
+- 57176e5: Support `amount` override
+  Make `secretKey` configurable as a payment method handler argument
+
 ## 0.0.1
 
 ### Patch Changes

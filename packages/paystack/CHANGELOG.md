@@ -1,5 +1,11 @@
 # @monkish/vendure-paystack-plugin
 
+## 0.0.3
+
+### Patch Changes
+
+- 1dd28a4: Unset transaction reference code to allow same order retries
+
 ## 0.0.2
 
 ### Patch Changes

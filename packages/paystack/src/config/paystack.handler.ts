@@ -15,15 +15,21 @@ export const paystackPaymentMethodHandler = new PaymentMethodHandler({
 
   description: [{ languageCode: LanguageCode.en, value: 'Paystack payments' }],
 
-  args: {},
+  args: {
+    secretKey: {
+      type: 'string',
+      label: [{ languageCode: LanguageCode.en, value: 'Secret key' }],
+      ui: { component: 'password-form-input' },
+    },
+  },
 
   init(injector: Injector) {
     paystackService = injector.get(PaystackService);
   },
 
   createPayment(ctx, _order, amount, _args, metadata): CreatePaymentResult {
-    // Payment is already settled in Paystack by the time the webhook in paystack.controller.ts
-    // adds the payment to the order
+    /* Payment is already settled in Paystack by the time the webhook in paystack.controller.ts
+     adds the payment to the order */
     if (ctx.apiType !== 'admin') {
       throw Error(`CreatePayment is not allowed for apiType '${ctx.apiType}'`);
     }
@@ -42,12 +48,12 @@ export const paystackPaymentMethodHandler = new PaymentMethodHandler({
   },
 
   async createRefund(
-    _ctx,
+    ctx,
     input,
     _amount,
     order,
     payment
   ): Promise<CreateRefundResult> {
-    return paystackService.createRefund(input, order, payment);
+    return paystackService.createRefund(ctx, input, order, payment);
   },
 });

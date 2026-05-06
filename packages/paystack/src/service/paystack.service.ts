@@ -1,5 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { RefundOrderInput } from '@vendure/common/lib/generated-types';
+import { Injectable } from '@nestjs/common';
+import {
+  ConfigurableOperation,
+  RefundOrderInput,
+} from '@vendure/common/lib/generated-types';
 import {
   ActiveOrderService,
   ChannelService,
@@ -23,10 +26,8 @@ import { paystackPaymentMethodHandler } from '../config/paystack.handler';
 import {
   loggerCtx,
   PAYSTACK_API_URL,
-  PLUGIN_INIT_OPTIONS,
   SUPPORTED_CURRENCICES,
 } from '../constants';
-import type { PaystackPluginOptions } from '../paystack.plugin';
 import {
   ErrorCode,
   PaystackPaymentIntent,
@@ -46,26 +47,72 @@ class PaymentIntentError implements PaystackPaymentIntentError {
   constructor(public message: string) {}
 }
 
+function secretKeyFromHandler(
+  handler: Pick<ConfigurableOperation, 'args'>
+): string | undefined {
+  const arg = handler.args.find((a) => a.name === 'secretKey');
+  const v = arg?.value?.trim();
+  return v || undefined;
+}
+
 @Injectable()
 export class PaystackService {
-  private paystackApiClient: AxiosInstance;
-
   constructor(
-    @Inject(PLUGIN_INIT_OPTIONS) private pluginOptions: PaystackPluginOptions,
     private activeOrderService: ActiveOrderService,
     private channelService: ChannelService,
     private connection: TransactionalConnection,
     private orderService: OrderService,
     private paymentMethodService: PaymentMethodService,
     private requestContextService: RequestContextService
-  ) {
-    this.paystackApiClient = axios.create({
+  ) {}
+
+  private createPaystackClient(secretKey: string): AxiosInstance {
+    return axios.create({
       baseURL: PAYSTACK_API_URL,
       headers: {
-        Authorization: `Bearer ${this.pluginOptions.secretKey}`,
+        Authorization: `Bearer ${secretKey}`,
       },
       validateStatus: (status: number) => status < 500,
     });
+  }
+
+  async getPaystackWebhookSecretKey(): Promise<string | null> {
+    const ctx = await this.createContext();
+    const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
+    return secretKeyFromHandler(paymentMethod.handler) ?? null;
+  }
+
+  private async listPaystackPaymentMethods(
+    ctx: RequestContext
+  ): Promise<PaymentMethod[]> {
+    return (await this.paymentMethodService.findAll(ctx)).items.filter(
+      (m) => m.handler.code === paystackPaymentMethodHandler.code
+    );
+  }
+
+  private async getConfiguredPaymentMethod(
+    ctx: RequestContext
+  ): Promise<PaymentMethod> {
+    const methods = await this.listPaystackPaymentMethods(ctx);
+
+    if (methods.length === 0) {
+      throw new UserInputError(
+        'No Paystack payment method is configured for this channel.'
+      );
+    }
+
+    if (methods.length > 1) {
+      Logger.warn(
+        'Multiple Paystack payment methods detected; using the first configured method.',
+        loggerCtx
+      );
+    }
+
+    const only = methods[0];
+    if (!only) {
+      throw new InternalServerError(`[${loggerCtx}] No Paystack payment method`);
+    }
+    return only;
   }
 
   async initializeTransaction(
@@ -84,11 +131,15 @@ export class PaystackService {
       'customer',
     ]);
     if (!order) {
-      // This should never happen
       throw new UserInputError('No order found for active session');
     }
 
-    const { channels, callbackUrl, metadata } = input;
+    const {
+      channels,
+      callbackUrl,
+      metadata,
+      paystackAmount,
+    } = input;
     const { totalWithTax, customer, currencyCode, code } = order;
 
     if (!customer) {
@@ -102,20 +153,45 @@ export class PaystackService {
       `);
     }
 
+    const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
+    const secretKey = secretKeyFromHandler(paymentMethod.handler);
+    if (!secretKey) {
+      throw new InternalServerError(
+        `[${loggerCtx}] Paystack payment method "${paymentMethod.code}" has no secret key configured.`
+      );
+    }
+
+    let amountToCharge = totalWithTax;
+    if (paystackAmount != null) {
+      if (!Number.isInteger(paystackAmount) || paystackAmount <= 0) {
+        throw new UserInputError('paystackAmount must be a positive integer.');
+      }
+      amountToCharge = paystackAmount;
+    }
+
+    const userMeta =
+      metadata &&
+      typeof metadata === 'object' &&
+      !Array.isArray(metadata) &&
+      metadata !== null
+        ? (metadata as Record<string, unknown>)
+        : {};
+    const mergedMetadata = userMeta;
+
     try {
-      const { data, status } =
-        await this.paystackApiClient.post<PaystackPaymentIntent>(
-          '/transaction/initialize',
-          {
-            amount: totalWithTax,
-            email: customer.emailAddress,
-            currency: currencyCode,
-            reference: code,
-            callback_url: callbackUrl,
-            metadata,
-            channels,
-          }
-        );
+      const client = this.createPaystackClient(secretKey);
+      const { data, status } = await client.post<PaystackPaymentIntent>(
+        '/transaction/initialize',
+        {
+          amount: amountToCharge,
+          email: customer.emailAddress,
+          currency: currencyCode,
+          reference: code,
+          callback_url: callbackUrl,
+          metadata: mergedMetadata,
+          channels,
+        }
+      );
 
       if (status !== 200) {
         return new PaymentIntentError(data.message);
@@ -133,12 +209,16 @@ export class PaystackService {
     }
   }
 
-  async verifyTransaction(transactionReference: string): Promise<boolean> {
+  async verifyTransaction(
+    secretKey: string,
+    transactionReference: string
+  ): Promise<boolean> {
+    const client = this.createPaystackClient(secretKey);
     try {
       const {
         data: { data },
         status,
-      } = await this.paystackApiClient.get<VerificationResponse>(
+      } = await client.get<VerificationResponse>(
         `/transaction/verify/${transactionReference}`
       );
 
@@ -166,17 +246,43 @@ export class PaystackService {
   }
 
   async createRefund(
+    ctx: RequestContext,
     input: RefundOrderInput,
     order: Order,
     payment: Payment
   ): Promise<CreateRefundResult> {
+    const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
+    if (payment.method !== paymentMethod.code) {
+      Logger.error(
+        `[${loggerCtx}] Refund failed: payment method ${payment.method} does not match configured Paystack method ${paymentMethod.code}`,
+        loggerCtx
+      );
+      return {
+        state: 'Failed' as const,
+        transactionId: payment.metadata.public.transactionId,
+      };
+    }
+    const secretKey = secretKeyFromHandler(paymentMethod.handler);
+    if (!secretKey) {
+      Logger.error(
+        `[${loggerCtx}] Refund failed: no secret key on payment method ${paymentMethod.code}`,
+        loggerCtx
+      );
+      return {
+        state: 'Failed' as const,
+        transactionId: payment.metadata.public.transactionId,
+      };
+    }
+
+    const client = this.createPaystackClient(secretKey);
+
     try {
       const { reason } = input;
 
       const {
         data: { data },
         status,
-      } = await this.paystackApiClient.post<RefundResponse>('/refund', {
+      } = await client.post<RefundResponse>('/refund', {
         transaction: order.code,
         amount: input.amount,
         merchant_note: reason,
@@ -220,16 +326,20 @@ export class PaystackService {
     }
   }
 
-  async handleSuccessfulCharge({ data }: TransactionEvent): Promise<void> {
+  async handleSuccessfulCharge(
+    event: TransactionEvent,
+    webhookSecretKey: string
+  ): Promise<void> {
     const isTransactionSuccessful = await this.verifyTransaction(
-      data.reference
+      webhookSecretKey,
+      event.data.reference
     );
     if (!isTransactionSuccessful) return;
 
     const outerCtx = await this.createContext();
 
     this.connection.withTransaction(outerCtx, async (ctx: RequestContext) => {
-      const order = await this.orderService.findOneByCode(ctx, data.reference);
+      const order = await this.orderService.findOneByCode(ctx, event.data.reference);
       if (!order) return;
 
       if (order.state !== 'ArrangingPayment') {
@@ -254,7 +364,7 @@ export class PaystackService {
         }
       }
 
-      const paymentMethod = await this.getPaymentMethod(ctx);
+      const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
 
       const addPaymentToOrderResult = await this.orderService.addPaymentToOrder(
         ctx,
@@ -262,7 +372,7 @@ export class PaystackService {
         {
           method: paymentMethod.code,
           metadata: {
-            transactionId: data.id,
+            transactionId: event.data.id,
           },
         }
       );
@@ -291,9 +401,8 @@ export class PaystackService {
       );
       if (!order) return;
 
-      const payment = order.payments.find(
-        (p) => p.method === paystackPaymentMethodHandler.code
-      );
+      const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
+      const payment = order.payments.find((p) => p.method === paymentMethod.code);
 
       if (!payment) {
         Logger.error(
@@ -335,20 +444,6 @@ export class PaystackService {
 
       Logger.info(`Refund for order ${order.code} processed`, loggerCtx);
     });
-  }
-
-  private async getPaymentMethod(ctx: RequestContext): Promise<PaymentMethod> {
-    const method = (await this.paymentMethodService.findAll(ctx)).items.find(
-      (m) => m.handler.code === paystackPaymentMethodHandler.code
-    );
-
-    if (!method) {
-      throw new InternalServerError(
-        `[${loggerCtx}] Could not find Paystack PaymentMethod`
-      );
-    }
-
-    return method;
   }
 
   private async createContext(channelToken?: string): Promise<RequestContext> {

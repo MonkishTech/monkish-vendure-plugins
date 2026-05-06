@@ -53,3 +53,5 @@ vitest.config.*.timestamp*
 !.yarn/sdks
 !.yarn/versions
 __test_db__
+
+tsconfig.lib.tsbuildinfo

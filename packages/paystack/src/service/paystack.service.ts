@@ -342,18 +342,10 @@ export class PaystackService {
     const outerCtx = await this.createContext();
 
     this.connection.withTransaction(outerCtx, async (ctx: RequestContext) => {
-      const meta = event.data.metadata;
+      const rawOrderCode =
+        event.data.metadata?.[PAYSTACK_ORDER_CODE_METADATA_KEY];
       const orderCode =
-        meta &&
-        typeof meta === 'object' &&
-        !Array.isArray(meta) &&
-        typeof (meta as Record<string, unknown>)[
-          PAYSTACK_ORDER_CODE_METADATA_KEY
-        ] === 'string'
-          ? String(
-              (meta as Record<string, unknown>)[PAYSTACK_ORDER_CODE_METADATA_KEY]
-            )
-          : undefined;
+        typeof rawOrderCode === 'string' ? rawOrderCode : undefined;
       if (!orderCode) {
         Logger.error(
           `Paystack charge.success missing ${PAYSTACK_ORDER_CODE_METADATA_KEY} in metadata (reference ${event.data.reference})`,

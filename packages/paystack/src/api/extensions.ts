@@ -20,6 +20,13 @@ export const shopApiSchemaExtensions: DocumentNode = graphql`
     callbackUrl: String!
 
     """
+    Amount to charge in Paystack (order currency, minor units). When set, this is only
+    sent to Paystack for transaction initialize; it does not change the order
+    totalWithTax in Vendure. Use for e.g. passing card fees to the customer.
+    """
+    paystackAmount: Money
+
+    """
     An array of payment channels to control what channels you want to make available
     to the user to make a payment with. If not specified, the customer will be shown all
     the payment methods selected on your dashboard.

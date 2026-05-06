@@ -3,27 +3,32 @@ import {
   Controller,
   Headers,
   HttpStatus,
-  Inject,
   Post,
+  Req,
   Res,
 } from '@nestjs/common';
 import { Logger } from '@vendure/core';
 import { createHmac } from 'crypto';
-import type { Response } from 'express';
-import { loggerCtx, PLUGIN_INIT_OPTIONS } from '../constants';
-import type { PaystackPluginOptions } from '../paystack.plugin';
+import type { Request, Response } from 'express';
+import { loggerCtx } from '../constants';
 import { PaystackService } from '../service/paystack.service';
 import type { RefundEvent, TransactionEvent, WebhookEvent } from '../types';
 
+function paystackBodyString(req: Request, payload: unknown): string {
+  const raw = (req as { rawBody?: Buffer }).rawBody;
+  if (raw != null && Buffer.isBuffer(raw)) {
+    return raw.toString('utf8');
+  }
+  return JSON.stringify(payload);
+}
+
 @Controller('payments')
 export class PaystackController {
-  constructor(
-    @Inject(PLUGIN_INIT_OPTIONS) private pluginOptions: PaystackPluginOptions,
-    private paystackService: PaystackService
-  ) {}
+  constructor(private paystackService: PaystackService) {}
 
   @Post('paystack')
   async webhook(
+    @Req() req: Request,
     @Headers('x-paystack-signature') signature: string | undefined,
     @Body() payload: WebhookEvent,
     @Res() response: Response
@@ -35,9 +40,16 @@ export class PaystackController {
       return;
     }
 
-    const hash = createHmac('sha512', this.pluginOptions.secretKey)
-      .update(JSON.stringify(payload))
-      .digest('hex');
+    const bodyString = paystackBodyString(req, payload);
+    const secret = await this.paystackService.getPaystackWebhookSecretKey();
+    if (!secret) {
+      const msg = 'No Paystack payment methods with a secret key configured';
+      Logger.error(msg, loggerCtx);
+      response.status(HttpStatus.BAD_REQUEST).send(msg);
+      return;
+    }
+
+    const hash = createHmac('sha512', secret).update(bodyString).digest('hex');
 
     if (hash !== signature) {
       const errorMessage = 'Invalid signature';
@@ -48,14 +60,15 @@ export class PaystackController {
 
     switch (payload.event) {
       case 'charge.success':
-        this.paystackService.handleSuccessfulCharge(
-          payload as TransactionEvent
+        await this.paystackService.handleSuccessfulCharge(
+          payload as TransactionEvent,
+          secret
         );
         break;
       case 'refund.processed':
       case 'refund.pending':
       case 'refund.failed':
-        this.paystackService.handleRefundEvent(payload as RefundEvent);
+        await this.paystackService.handleRefundEvent(payload as RefundEvent);
         break;
       default:
         Logger.warn(`Unhandled event type ${payload.event}`, loggerCtx);

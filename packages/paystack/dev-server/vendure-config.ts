@@ -33,9 +33,7 @@ export const config: VendureConfig = {
   },
   plugins: [
     DefaultSearchPlugin.init({}),
-    PaystackPlugin.init({
-      secretKey: process.env.PAYSTACK_SECRET_KEY as string,
-    }),
+    PaystackPlugin,
     AdminUiPlugin.init({
       port: 3002,
       route: 'admin',

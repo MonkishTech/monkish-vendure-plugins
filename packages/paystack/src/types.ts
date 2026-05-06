@@ -17,7 +17,9 @@ export type CurrencyCode = ReturnType<typeof graphql.scalar<'CurrencyCode'>>;
 
 export type PaystackPaymentIntentInput = VariablesOf<
   typeof CreatePaystackPaymentIntent
->['input'];
+>['input'] & {
+  paystackAmount?: number | null;
+};
 
 export type PaystackPaymentIntentResult = ResultOf<
   typeof CreatePaystackPaymentIntent

@@ -645,4 +645,26 @@ describe('Mpesa Plugin', () => {
     expect(settled.payments[0].metadata.chargeAmount).toBe(chargeAmount);
     expect(settled.payments[0].metadata.mpesaReceiptNumber).toBe('RCPFEE');
   });
+
+  it('records an explicit settlementAmount below the balance', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const settlementAmount = Math.min(100, order.totalWithTax - 1);
+    const chargeAmount = Math.ceil(settlementAmount / 100) * 100;
+    const sent = captureStk('ws_CO_deposit');
+    const initiated = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+      settlementAmount,
+    });
+    expect(initiated.initiateMpesaTransaction.success).toBe(true);
+    expect(sent()?.Amount).toBe(chargeAmount / 100);
+    mockStkQuery('ws_CO_deposit');
+    await postCallback(
+      successCallback('ws_CO_deposit', chargeAmount / 100, 'RCPDEP')
+    );
+    const settled = await adminOrder(order.id);
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].amount).toBe(settlementAmount);
+    expect(settled.state).not.toBe('PaymentSettled');
+    await cancelActiveOrder(shopClient);
+  });
 });

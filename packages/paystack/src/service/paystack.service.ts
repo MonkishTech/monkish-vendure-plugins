@@ -5,6 +5,7 @@ import {
 } from '@vendure/common/lib/generated-types';
 import {
   ActiveOrderService,
+  ConfigService,
   CreateRefundResult,
   InternalServerError,
   isGraphQlErrorResult,
@@ -134,6 +135,7 @@ function secretKeyFromHandler(
 export class PaystackService {
   constructor(
     private activeOrderService: ActiveOrderService,
+    private configService: ConfigService,
     private connection: TransactionalConnection,
     private orderService: OrderService,
     private paymentMethodService: PaymentMethodService,
@@ -437,9 +439,6 @@ export class PaystackService {
       ctx,
       undefined
     );
-    if (!sessionOrder) {
-      throw new UserInputError('No active order found for session');
-    }
     const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
     const secretKey = secretKeyFromHandler(paymentMethod.handler);
     if (!secretKey) {
@@ -452,8 +451,27 @@ export class PaystackService {
       throw new UserInputError('Paystack payment was not successful');
     }
     const orderCode = orderCodeFromMetadata(verified.metadata);
-    if (orderCode !== sessionOrder.code) {
-      throw new UserInputError('Payment reference does not match this order');
+    if (sessionOrder) {
+      if (orderCode !== sessionOrder.code) {
+        throw new UserInputError('Payment reference does not match this order');
+      }
+    } else {
+      if (!orderCode) {
+        throw new UserInputError('No active order found for session');
+      }
+      const owned = await this.orderService.findOneByCode(ctx, orderCode, [
+        'customer',
+        'customer.user',
+      ]);
+      const canAccess =
+        owned != null &&
+        (await this.configService.orderOptions.orderByCodeAccessStrategy.canAccessOrder(
+          ctx,
+          owned
+        ));
+      if (!canAccess) {
+        throw new UserInputError('Payment reference does not match this order');
+      }
     }
     const adminCtx = await this.createContext();
     try {

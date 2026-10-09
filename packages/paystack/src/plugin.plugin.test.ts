@@ -640,4 +640,68 @@ describe('PaystackPlugin', () => {
       }
     `);
   });
+
+  it('creates one payment when confirm and the webhook see the same transaction', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, {
+        ...mockInitializeTransactionResponse,
+        data: {
+          ...mockInitializeTransactionResponse.data,
+          reference: 'once-ref',
+        },
+      });
+    await shopClient.query(CreatePaystackPaymentIntent, {
+      input: {
+        callbackUrl: 'https://example.com',
+        chargeAmount: order.totalWithTax + 50,
+      },
+    });
+    const metadata = {
+      order_code: order.code,
+      charge_amount: order.totalWithTax + 50,
+    };
+    mockVerify('once-ref', order.totalWithTax + 50, metadata, 777);
+    await shopClient.query(ConfirmPaystackPayment, { reference: 'once-ref' });
+
+    mockVerify('once-ref', order.totalWithTax + 50, metadata, 777);
+    const second = await shopClient.query(ConfirmPaystackPayment, {
+      reference: 'once-ref',
+    });
+    expect(second.confirmPaystackPayment.state).toBe('PaymentSettled');
+
+    mockVerify('once-ref', order.totalWithTax + 50, metadata, 777);
+    const webhookBody = {
+      event: 'charge.success',
+      data: {
+        reference: 'once-ref',
+        id: 777,
+        amount: order.totalWithTax + 50,
+        metadata,
+      },
+    };
+    const bodyString = JSON.stringify(webhookBody);
+    const signature = createHmac('sha512', TEST_SECRET_KEY)
+      .update(bodyString)
+      .digest('hex');
+    const response = await shopClient.fetch(
+      `http://localhost:${API_PORT}/payments/paystack`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-paystack-signature': signature,
+        },
+        body: bodyString,
+      }
+    );
+    expect(response.status).toBe(200);
+
+    const { order: settled } = await adminClient.query(OrderPayments, {
+      id: second.confirmPaystackPayment.id,
+    });
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].transactionId).toBe('777');
+  });
 });

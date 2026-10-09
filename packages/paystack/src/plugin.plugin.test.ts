@@ -91,6 +91,22 @@ const OrderPayments = gqlTag`
   }
 `;
 
+const OrdersByCode = gqlTag`
+  query OrdersByCode($code: String!) {
+    orders(options: { filter: { code: { eq: $code } } }) {
+      items {
+        state
+        payments {
+          amount
+          state
+          transactionId
+          metadata
+        }
+      }
+    }
+  }
+`;
+
 function mockVerify(
   reference: string,
   amount: number,
@@ -284,13 +300,19 @@ describe('PaystackPlugin', () => {
   });
 
   it('sends paystackAmount to Paystack when set', async () => {
-    const extra = 12345;
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    await addItem(shopClient, 1, 1);
+    const { activeOrder } = await shopClient.query(gqlTag`
+      query {
+        activeOrder {
+          totalWithTax
+        }
+      }
+    `);
+    const extra = activeOrder.totalWithTax + 12345;
     nock(`${PAYSTACK_API_URL}`)
       .post('/transaction/initialize', (body) => body.amount === extra)
       .reply(200, mockInitializeTransactionResponse);
-
-    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
-    await addItem(shopClient, 1, 1);
 
     const { createPaystackPaymentIntent } = await shopClient.query(
       CreatePaystackPaymentIntent,
@@ -703,5 +725,219 @@ describe('PaystackPlugin', () => {
     });
     expect(settled.payments).toHaveLength(1);
     expect(settled.payments[0].transactionId).toBe('777');
+  });
+
+  it('rejects confirm when the verified amount differs from charge_amount', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, {
+        ...mockInitializeTransactionResponse,
+        data: {
+          ...mockInitializeTransactionResponse.data,
+          reference: 'mismatch-ref',
+        },
+      });
+    await shopClient.query(CreatePaystackPaymentIntent, {
+      input: {
+        callbackUrl: 'https://example.com',
+        chargeAmount: order.totalWithTax + 10,
+      },
+    });
+    mockVerify(
+      'mismatch-ref',
+      order.totalWithTax,
+      { order_code: order.code, charge_amount: order.totalWithTax + 10 },
+      888
+    );
+
+    await expect(
+      shopClient.query(ConfirmPaystackPayment, { reference: 'mismatch-ref' })
+    ).rejects.toThrow('Verified Paystack amount does not match charge_amount.');
+
+    const { orders } = await adminClient.query(OrdersByCode, {
+      code: order.code,
+    });
+    expect(orders.items[0].payments ?? []).toHaveLength(0);
+
+    await shopClient.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "Cancelled") {
+          ... on Order {
+            state
+          }
+        }
+      }
+    `);
+  });
+
+  it('rejects confirm when the outstanding balance grows past chargeAmount', async () => {
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    await addItem(shopClient, 1, 1);
+    await shopClient.query(gqlTag`
+      mutation {
+        setOrderShippingAddress(
+          input: {
+            fullName: "Ada Lovelace"
+            streetLine1: "1 Market Street"
+            city: "Nairobi"
+            postalCode: "00100"
+            countryCode: "KE"
+          }
+        ) {
+          ... on Order {
+            id
+          }
+        }
+      }
+    `);
+    const beforeShipping = await shopClient.query(ActiveOrderForPaystack);
+    await shopClient.query(
+      gqlTag`
+        mutation SetShipping($ids: [ID!]!) {
+          setOrderShippingMethod(shippingMethodId: $ids) {
+            ... on Order {
+              id
+            }
+          }
+        }
+      `,
+      { ids: [beforeShipping.eligibleShippingMethods[0].id] }
+    );
+    const priced = await shopClient.query(gqlTag`
+      query {
+        activeOrder {
+          code
+          totalWithTax
+        }
+      }
+    `);
+    const chargeAmount = priced.activeOrder.totalWithTax;
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, {
+        ...mockInitializeTransactionResponse,
+        data: {
+          ...mockInitializeTransactionResponse.data,
+          reference: 'grew-ref',
+        },
+      });
+    await shopClient.query(CreatePaystackPaymentIntent, {
+      input: { callbackUrl: 'https://example.com', chargeAmount },
+    });
+    await addItem(shopClient, 1, 1);
+    await shopClient.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "ArrangingPayment") {
+          ... on Order {
+            state
+          }
+        }
+      }
+    `);
+    mockVerify(
+      'grew-ref',
+      chargeAmount,
+      { order_code: priced.activeOrder.code, charge_amount: chargeAmount },
+      889
+    );
+
+    await expect(
+      shopClient.query(ConfirmPaystackPayment, { reference: 'grew-ref' })
+    ).rejects.toThrow('Outstanding balance is greater than chargeAmount.');
+
+    await shopClient.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "Cancelled") {
+          ... on Order {
+            state
+          }
+        }
+      }
+    `);
+  });
+
+  it('answers 200 when the webhook charge has no order code', async () => {
+    mockVerify('no-code-ref', 100, { charge_amount: 100 }, 890);
+    const body = {
+      event: 'charge.success',
+      data: { reference: 'no-code-ref', id: 890 },
+    };
+    const bodyString = JSON.stringify(body);
+    const signature = createHmac('sha512', TEST_SECRET_KEY)
+      .update(bodyString)
+      .digest('hex');
+    const response = await shopClient.fetch(
+      `http://localhost:${API_PORT}/payments/paystack`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-paystack-signature': signature,
+        },
+        body: bodyString,
+      }
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('answers 500 when the webhook order cannot be loaded', async () => {
+    mockVerify(
+      'missing-order-ref',
+      100,
+      { order_code: 'DOES-NOT-EXIST', charge_amount: 100 },
+      891
+    );
+    const body = {
+      event: 'charge.success',
+      data: { reference: 'missing-order-ref', id: 891 },
+    };
+    const bodyString = JSON.stringify(body);
+    const signature = createHmac('sha512', TEST_SECRET_KEY)
+      .update(bodyString)
+      .digest('hex');
+    const response = await shopClient.fetch(
+      `http://localhost:${API_PORT}/payments/paystack`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-paystack-signature': signature,
+        },
+        body: bodyString,
+      }
+    );
+    expect(response.status).toBe(500);
+  });
+
+  it('settles the outstanding balance when charge_amount is absent', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    mockVerify('legacy-ref', order.totalWithTax, { order_code: order.code }, 892);
+    const body = {
+      event: 'charge.success',
+      data: { reference: 'legacy-ref', id: 892 },
+    };
+    const bodyString = JSON.stringify(body);
+    const signature = createHmac('sha512', TEST_SECRET_KEY)
+      .update(bodyString)
+      .digest('hex');
+    const response = await shopClient.fetch(
+      `http://localhost:${API_PORT}/payments/paystack`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-paystack-signature': signature,
+        },
+        body: bodyString,
+      }
+    );
+    expect(response.status).toBe(200);
+    const { orders } = await adminClient.query(OrdersByCode, {
+      code: order.code,
+    });
+    expect(orders.items[0].state).toBe('PaymentSettled');
+    expect(orders.items[0].payments[0].amount).toBe(order.totalWithTax);
+    expect(orders.items[0].payments[0].metadata?.chargeAmount).toBeUndefined();
   });
 });

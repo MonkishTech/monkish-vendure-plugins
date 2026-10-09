@@ -11,7 +11,7 @@ import { Logger } from '@vendure/core';
 import { createHmac } from 'crypto';
 import type { Request, Response } from 'express';
 import { loggerCtx } from '../constants';
-import { PaystackService } from '../service/paystack.service';
+import { PaystackService, PaystackSettleRejection } from '../service/paystack.service';
 import type { RefundEvent, TransactionEvent, WebhookEvent } from '../types';
 
 function paystackBodyString(req: Request, payload: unknown): string {
@@ -58,22 +58,34 @@ export class PaystackController {
       return;
     }
 
-    switch (payload.event) {
-      case 'charge.success':
-        await this.paystackService.handleSuccessfulCharge(
-          payload as TransactionEvent,
-          secret
-        );
-        break;
-      case 'refund.processed':
-      case 'refund.pending':
-      case 'refund.failed':
-        await this.paystackService.handleRefundEvent(payload as RefundEvent);
-        break;
-      default:
-        Logger.warn(`Unhandled event type ${payload.event}`, loggerCtx);
+    try {
+      switch (payload.event) {
+        case 'charge.success':
+          await this.paystackService.handleSuccessfulCharge(
+            payload as TransactionEvent,
+            secret
+          );
+          break;
+        case 'refund.processed':
+        case 'refund.pending':
+        case 'refund.failed':
+          await this.paystackService.handleRefundEvent(payload as RefundEvent);
+          break;
+        default:
+          Logger.warn(`Unhandled event type ${payload.event}`, loggerCtx);
+      }
+      response.status(HttpStatus.OK).send('Ok');
+    } catch (error) {
+      if (error instanceof PaystackSettleRejection) {
+        Logger.error(error.message, loggerCtx);
+        response.status(HttpStatus.OK).send('Ok');
+        return;
+      }
+      Logger.error(
+        error instanceof Error ? error.message : 'Paystack webhook failed',
+        loggerCtx
+      );
+      response.status(HttpStatus.INTERNAL_SERVER_ERROR).send('Error');
     }
-
-    response.status(HttpStatus.OK).send('Ok');
   }
 }

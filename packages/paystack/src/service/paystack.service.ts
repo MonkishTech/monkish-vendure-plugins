@@ -422,7 +422,7 @@ export class PaystackService {
       event.data.reference
     );
     if (!verified) {
-      return;
+      throw new PaystackSettleRejection('Paystack payment was not successful');
     }
     const outerCtx = await this.createContext();
     await this.connection.withTransaction(outerCtx, async (ctx) => {

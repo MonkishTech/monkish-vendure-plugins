@@ -11,9 +11,11 @@ import {
   OrderStateTransitionError,
   Payment,
   PaymentMethod,
+  PaymentService,
   Refund,
   RequestContext,
   TransactionalConnection,
+  isGraphQlErrorResult,
 } from '@vendure/core';
 import axios, { AxiosError, AxiosInstance } from 'axios';
 
@@ -37,6 +39,13 @@ import {
   TokenResponse,
 } from '../types';
 import { formatPhoneNumber } from '../util/phone-utils';
+
+export class MpesaSettleRejection extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MpesaSettleRejection';
+  }
+}
 
 function outstandingBalance(order: Order): number {
   const covered = (order.payments ?? [])
@@ -98,7 +107,8 @@ export class MpesaService {
   constructor(
     private activeOrderService: ActiveOrderService,
     private connection: TransactionalConnection,
-    private orderService: OrderService
+    private orderService: OrderService,
+    private paymentService: PaymentService
   ) {}
 
   async initiateStkPush(
@@ -303,8 +313,7 @@ export class MpesaService {
     ctx: RequestContext,
     payload: STKCallbackPayload
   ) {
-    const { CheckoutRequestID, CallbackMetadata, ResultCode } =
-      payload.Body.stkCallback;
+    const { CheckoutRequestID, ResultCode } = payload.Body.stkCallback;
 
     const existingPayment = await this.getPaymentByTransactionId(
       ctx,
@@ -345,54 +354,14 @@ export class MpesaService {
             mpesaCheckoutRequestID: CheckoutRequestID,
           },
         },
+        relations: ['payments'],
       });
-      if (!order) return;
-
-      if (order.state !== 'ArrangingPayment') {
-        const transitionResult = await this.orderService.transitionToState(
-          txCtx,
-          order.id,
-          'ArrangingPayment'
+      if (!order) {
+        throw new Error(
+          `M-Pesa order for ${CheckoutRequestID} could not be loaded.`
         );
-
-        if (transitionResult instanceof OrderStateTransitionError) {
-          Logger.error(
-            `Error transitioning order ${order.code} to ArrangingPayment state: ${transitionResult.message}`,
-            loggerCtx
-          );
-          return;
-        }
       }
-
-      const MpesaReceiptNumber =
-        CallbackMetadata?.Item?.find(
-          (item) => item.Name === 'MpesaReceiptNumber'
-        )?.Value ?? 'N/A';
-
-      const addPaymentToOrderResult = await this.orderService.addPaymentToOrder(
-        txCtx,
-        order.id,
-        {
-          method: mpesaPaymentMethodHandler.code,
-          metadata: {
-            CheckoutRequestID,
-            MpesaReceiptNumber,
-          },
-        }
-      );
-
-      if (!(addPaymentToOrderResult instanceof Order)) {
-        Logger.error(
-          `Error adding payment to order ${order.code}: ${addPaymentToOrderResult.message}`,
-          loggerCtx
-        );
-        return;
-      }
-
-      Logger.info(
-        `Mpesa Payment ${MpesaReceiptNumber} added to order ${order.code}`,
-        loggerCtx
-      );
+      await this.settleSuccessfulCallback(txCtx, order, payload);
     });
 
     const config = await this.getMpesaConfig(ctx);
@@ -405,6 +374,90 @@ export class MpesaService {
         `STK query failed for transaction ${CheckoutRequestID}: ${queryResult.message}`,
         loggerCtx
       );
+    }
+  }
+
+  private async settleSuccessfulCallback(
+    ctx: RequestContext,
+    order: Order,
+    payload: STKCallbackPayload
+  ) {
+    const { CheckoutRequestID, CallbackMetadata } = payload.Body.stkCallback;
+    const charge = order.customFields.mpesaChargeAmount;
+    const settlement = order.customFields.mpesaSettlementAmount;
+    const amountValue = CallbackMetadata?.Item?.find(
+      (item) => item.Name === 'Amount'
+    )?.Value;
+    const shillings = Number(amountValue);
+    const usable = Number.isInteger(shillings) && shillings > 0;
+    if (typeof charge === 'number' && (!usable || shillings * 100 !== charge)) {
+      throw new MpesaSettleRejection(
+        'Verified M-Pesa amount does not match mpesaChargeAmount.'
+      );
+    }
+
+    if (order.state !== 'ArrangingPayment') {
+      const transitioned = await this.orderService.transitionToState(
+        ctx,
+        order.id,
+        'ArrangingPayment'
+      );
+      if (transitioned instanceof OrderStateTransitionError) {
+        throw new MpesaSettleRejection(transitioned.message);
+      }
+    }
+
+    const fresh = await this.orderService.findOne(ctx, order.id, ['payments']);
+    if (!fresh) {
+      throw new Error(
+        `M-Pesa order for ${CheckoutRequestID} could not be loaded.`
+      );
+    }
+
+    const outstanding = outstandingBalance(fresh);
+    const receipt =
+      CallbackMetadata?.Item?.find((item) => item.Name === 'MpesaReceiptNumber')
+        ?.Value ?? 'N/A';
+    const metadata = {
+      CheckoutRequestID,
+      MpesaReceiptNumber: receipt,
+      ...(typeof charge === 'number' ? { chargeAmount: charge } : {}),
+    };
+
+    if (settlement == null) {
+      if (typeof charge === 'number' && outstanding > charge) {
+        throw new MpesaSettleRejection(
+          'Outstanding balance is greater than chargeAmount.'
+        );
+      }
+      const added = await this.orderService.addPaymentToOrder(ctx, fresh.id, {
+        method: mpesaPaymentMethodHandler.code,
+        metadata,
+      });
+      if (!(added instanceof Order)) {
+        throw new MpesaSettleRejection(added.message);
+      }
+      Logger.info(
+        `Mpesa Payment ${receipt} added to order ${fresh.code}`,
+        loggerCtx
+      );
+      return;
+    }
+
+    if (settlement > outstanding) {
+      throw new MpesaSettleRejection(
+        'settlementAmount cannot exceed the outstanding balance.'
+      );
+    }
+    const payment = await this.paymentService.createPayment(
+      ctx,
+      fresh,
+      settlement,
+      mpesaPaymentMethodHandler.code,
+      metadata
+    );
+    if (isGraphQlErrorResult(payment)) {
+      throw new MpesaSettleRejection(payment.message);
     }
   }
 

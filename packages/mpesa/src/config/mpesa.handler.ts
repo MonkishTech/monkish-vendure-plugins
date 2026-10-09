@@ -223,12 +223,14 @@ export const mpesaPaymentMethodHandler = new PaymentMethodHandler({
       throw Error(`CreatePayment is not allowed for apiType '${ctx.apiType}'`);
     }
 
+    const chargeAmount = metadata?.chargeAmount;
     return {
       amount,
-      state: 'Settled',
+      state: 'Settled' as const,
       transactionId: metadata.CheckoutRequestID,
       metadata: {
         mpesaReceiptNumber: metadata.MpesaReceiptNumber,
+        ...(typeof chargeAmount === 'number' ? { chargeAmount } : {}),
       },
     };
   },

@@ -344,6 +344,34 @@ describe('Mpesa Plugin', () => {
     };
   }
 
+  function roundUpToShilling(minor: number) {
+    return Math.ceil(minor / 100) * 100;
+  }
+
+  function mockStkQuery(checkoutRequestId: string) {
+    nock(SANDBOX_BASE_URL).post('/mpesa/stkpushquery/v1/query').reply(200, {
+      ResponseCode: '0',
+      ResponseDescription: 'The service request is processed successfully.',
+      MerchantRequestID: '29115-34620561-1',
+      CheckoutRequestID: checkoutRequestId,
+      ResultCode: '0',
+      ResultDesc: 'The service request is processed successfully.',
+    });
+  }
+
+  async function adminOrder(orderId: string) {
+    const { order } = await adminClient.query(OrderPayments, { id: orderId });
+    return order as {
+      state: string;
+      payments: {
+        amount: number;
+        state: string;
+        transactionId: string;
+        metadata: Record<string, unknown>;
+      }[];
+    };
+  }
+
   function mockStk(checkoutRequestId: string, responseCode = '0') {
     return nock(SANDBOX_BASE_URL)
       .post('/mpesa/stkpush/v1/processrequest')
@@ -594,5 +622,27 @@ describe('Mpesa Plugin', () => {
       message: 'chargeAmount cannot be less than the settlement amount.',
     });
     await cancelActiveOrder(shopClient);
+  });
+
+  it('records the outstanding balance when the collected charge is higher', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = roundUpToShilling(order.totalWithTax) + 100;
+    captureStk('ws_CO_fee');
+    await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+      chargeAmount,
+    });
+    mockStkQuery('ws_CO_fee');
+    const response = await postCallback(
+      successCallback('ws_CO_fee', chargeAmount / 100, 'RCPFEE')
+    );
+    expect(response.status).toBeLessThan(500);
+    const settled = await adminOrder(order.id);
+    expect(settled.state).toBe('PaymentSettled');
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].amount).toBe(order.totalWithTax);
+    expect(settled.payments[0].transactionId).toBe('ws_CO_fee');
+    expect(settled.payments[0].metadata.chargeAmount).toBe(chargeAmount);
+    expect(settled.payments[0].metadata.mpesaReceiptNumber).toBe('RCPFEE');
   });
 });

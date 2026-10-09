@@ -1,0 +1,482 @@
+import nock from 'nock';
+import path from 'path';
+import { rm } from 'node:fs/promises';
+import gqlTag from 'graphql-tag';
+import {
+  CurrencyCode,
+  InitialData,
+  OrderService,
+  RequestContextService,
+} from '@vendure/core';
+import {
+  createTestEnvironment,
+  registerInitializer,
+  SimpleGraphQLClient,
+  SqljsInitializer,
+} from '@vendure/testing';
+import { MpesaPlugin } from './mpesa.plugin';
+import {
+  initialData,
+  testConfig,
+  addItem,
+  getCustomerList,
+  updateChannel,
+  getActiveChannel,
+} from '~utils';
+import { SANDBOX_BASE_URL, STK_PUSH_CALLBACK_ENDPOINT } from './constants';
+
+const API_PORT = 3050;
+const TEST_DB_DIR = path.join(__dirname, '../__test_db__');
+const API_CERTIFICATE = `-----BEGIN CERTIFICATE-----
+MIIDCzCCAfOgAwIBAgIUKPxBilHEHcuRBENj8GqZA/5rGPYwDQYJKoZIhvcNAQEL
+BQAwFTETMBEGA1UEAwwKbXBlc2EtdGVzdDAeFw0yNjAzMDIyMjQzNTRaFw0zNjAy
+MjgyMjQzNTRaMBUxEzARBgNVBAMMCm1wZXNhLXRlc3QwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQDgELxL3hxxMT0zxL18Uqx+L9GCSEvAtLtFHLN0ptxl
+QImAfiWDL3HL/2KeDdrYivdpcEE7pq0LsiiNDIRT64cIPqqbjLiFmE3MOnvuCT4F
+IMfES1sCjaHhISRHkAqU/dN1jBIvol6I1IL/G/BzydtPxdw9wC3vD2irgPxTCmsk
+zjvQvxGIgc3O550j++FMz5HyWFXjSxYiA2fMkogkk87olGzR7qWAhGC/ZR6EMwI2
+vmealnvr+AzF62Snu6Q5FUm/BHVk8yndeykbGTXLjDmPnO08+1k83npqso45rJ4q
+w1bq9JqGABsW4l7zirxxUJ2zS+EW3FW0ZfUkEm/B83NJAgMBAAGjUzBRMB0GA1Ud
+DgQWBBTNaikZ20c8cUWt83f7ZPqnB3HIpzAfBgNVHSMEGDAWgBTNaikZ20c8cUWt
+83f7ZPqnB3HIpzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAd
+naAqnNKhIdZLdauYCD3pFRPypUS6x4eV87iPe4cJal5eD1UwqW+BpFKJSCDkM1EX
+QPGQNh7MseHIRUq4XgVAMelhjj20tNKrIWiSPcePxjJmaLp7hITzOwUJrjCS3qI5
+FkqPYpWxor12p5g6R4rIipzFbTpC89mMnMpVwQNgL0FaKv4uLBi1unHen3H8yh4O
+XYd5fL/16mFMBSp8rWGouPpT1jtXyotacdlqAdpCHjgbTXYC6c6fRZBeqtbibRPL
+gk3Ln3jDF4MkhQ9dwL+ZFYuwlG3KYUAeCvpZwrWufpLyEwG0Vtt6DFPeDj3quhCR
+TKqA/+tq2Yk5jqvNtAP7
+-----END CERTIFICATE-----`;
+
+const mpesaTestInitialData: InitialData = {
+  ...initialData,
+  paymentMethods: [
+    {
+      name: 'mpesa',
+      handler: {
+        code: 'mpesa',
+        arguments: [
+          { name: 'consumerKey', value: 'test_consumer_key' },
+          { name: 'consumerSecret', value: 'test_consumer_secret' },
+          { name: 'environment', value: 'sandbox' },
+          { name: 'passkey', value: 'test_passkey' },
+          { name: 'shortCode', value: '174379' },
+          { name: 'shortCodeType', value: 'paybill' },
+          { name: 'initiatorName', value: 'test_initiator' },
+          { name: 'initiatorPassword', value: 'test_initiator_password' },
+          { name: 'apiCertificate', value: API_CERTIFICATE },
+          { name: 'vendureHost', value: `http://localhost:${API_PORT}` },
+        ],
+      },
+    },
+  ],
+};
+
+const Initiate = gqlTag`
+  mutation Initiate($phoneNumber: String!) {
+    initiateMpesaTransaction(phoneNumber: $phoneNumber) {
+      success
+      transactionId
+      message
+    }
+  }
+`;
+
+const Verify = gqlTag`
+  mutation Verify($transactionId: String!) {
+    verifyMpesaTransaction(transactionId: $transactionId) {
+      status
+      transactionId
+      message
+    }
+  }
+`;
+
+const ActiveOrderForMpesa = gqlTag`
+  query ActiveOrderForMpesa {
+    activeOrder {
+      id
+      code
+      state
+      totalWithTax
+    }
+    eligibleShippingMethods {
+      id
+    }
+  }
+`;
+
+const OrderPayments = gqlTag`
+  query OrderPayments($id: ID!) {
+    order(id: $id) {
+      state
+      payments {
+        amount
+        state
+        transactionId
+        metadata
+      }
+    }
+  }
+`;
+
+describe('Mpesa Plugin', () => {
+  const { server, adminClient, shopClient } = createTestEnvironment({
+    ...testConfig(API_PORT),
+    plugins: [
+      MpesaPlugin.init({
+        stkPushCallbackAdditionalIps: ['127.0.0.1', '::1'],
+      }),
+    ],
+  });
+
+  let customer: Awaited<
+    ReturnType<typeof getCustomerList>
+  >['customers']['items'][number];
+
+  beforeAll(async () => {
+    registerInitializer('sqljs', new SqljsInitializer(TEST_DB_DIR));
+    await server.init({
+      productsCsvPath: path.join(
+        __dirname,
+        '../../../utils/src/e2e/products.csv'
+      ),
+      initialData: mpesaTestInitialData,
+      customerCount: 2,
+    });
+    await adminClient.asSuperAdmin();
+    customer = (await getCustomerList(adminClient, { take: 2 })).customers
+      .items[0] as typeof customer;
+    const activeChannel = await getActiveChannel(shopClient);
+    await updateChannel(adminClient, {
+      id: activeChannel.id,
+      defaultCurrencyCode: CurrencyCode.KES,
+      availableCurrencyCodes: [CurrencyCode.KES, CurrencyCode.USD],
+    });
+  }, 120000);
+
+  afterAll(async () => {
+    await server.destroy();
+    await rm(TEST_DB_DIR, { recursive: true });
+  });
+
+  beforeEach(() => {
+    nock.cleanAll();
+    nock(SANDBOX_BASE_URL)
+      .persist()
+      .get(/\/oauth\/v1\/generate/)
+      .reply(200, { access_token: 'test_access_token', expires_in: '3599' });
+  });
+
+  async function arrangeArrangingPayment(
+    client: SimpleGraphQLClient
+  ): Promise<{ id: string; code: string; totalWithTax: number }> {
+    await client.asUserWithCredentials(customer.emailAddress, 'test');
+    const before = await client.query(ActiveOrderForMpesa);
+    if (before.activeOrder?.state === 'ArrangingPayment') {
+      return {
+        id: before.activeOrder.id,
+        code: before.activeOrder.code,
+        totalWithTax: before.activeOrder.totalWithTax,
+      };
+    }
+    if (!before.activeOrder) {
+      await addItem(client, 1, 1);
+    }
+    await client.query(gqlTag`
+      mutation {
+        setOrderShippingAddress(
+          input: {
+            fullName: "Ada Lovelace"
+            streetLine1: "1 Market Street"
+            city: "Nairobi"
+            postalCode: "00100"
+            countryCode: "KE"
+          }
+        ) {
+          ... on Order {
+            id
+          }
+        }
+      }
+    `);
+    const withMethods = await client.query(ActiveOrderForMpesa);
+    const shippingMethodId = withMethods.eligibleShippingMethods[0].id;
+    await client.query(
+      gqlTag`
+        mutation SetShipping($ids: [ID!]!) {
+          setOrderShippingMethod(shippingMethodId: $ids) {
+            ... on Order {
+              id
+            }
+          }
+        }
+      `,
+      { ids: [shippingMethodId] }
+    );
+    const transitioned = await client.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "ArrangingPayment") {
+          ... on Order {
+            id
+            code
+            state
+            totalWithTax
+          }
+          ... on OrderStateTransitionError {
+            errorCode
+            message
+          }
+        }
+      }
+    `);
+    const order = transitioned.transitionOrderToState;
+    if (order.state !== 'ArrangingPayment') {
+      throw new Error(order.message ?? 'Order did not reach ArrangingPayment');
+    }
+    return { id: order.id, code: order.code, totalWithTax: order.totalWithTax };
+  }
+
+  async function cancelActiveOrder(client: SimpleGraphQLClient) {
+    await client.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "Cancelled") {
+          ... on Order {
+            state
+          }
+        }
+      }
+    `);
+  }
+
+  async function setCheckoutRequestId(
+    orderId: string,
+    checkoutRequestId: string | null
+  ) {
+    const orderService = server.app.get(OrderService);
+    const requestContextService = server.app.get(RequestContextService);
+    const ctx = await requestContextService.create({ apiType: 'admin' });
+    const id = Number.parseInt(orderId.replace(/^T_/, ''), 10);
+    await orderService.updateCustomFields(ctx, id, {
+      mpesaCheckoutRequestID: checkoutRequestId,
+    });
+  }
+
+  async function postCallback(
+    payload: unknown,
+    headers: Record<string, string> = {}
+  ) {
+    return shopClient.fetch(
+      `http://localhost:${API_PORT}/${STK_PUSH_CALLBACK_ENDPOINT}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  function successCallback(
+    checkoutRequestId: string,
+    amountShillings: number,
+    receipt: string
+  ) {
+    return {
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: checkoutRequestId,
+          ResultCode: 0,
+          ResultDesc: 'The service request is processed successfully.',
+          CallbackMetadata: {
+            Item: [
+              { Name: 'Amount', Value: String(amountShillings) },
+              { Name: 'MpesaReceiptNumber', Value: receipt },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  function mockStk(checkoutRequestId: string, responseCode = '0') {
+    return nock(SANDBOX_BASE_URL)
+      .post('/mpesa/stkpush/v1/processrequest')
+      .reply(200, {
+        MerchantRequestID: '29115-34620561-1',
+        CheckoutRequestID: checkoutRequestId,
+        ResponseCode: responseCode,
+        ResponseDescription:
+          responseCode === '0'
+            ? 'Success. Request accepted for processing'
+            : 'Unable to lock subscriber',
+        CustomerMessage: 'ok',
+      });
+  }
+
+  it('returns failure when there is no active order', async () => {
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+    });
+    expect(result.initiateMpesaTransaction.success).toBe(false);
+    expect(result.initiateMpesaTransaction.message).toBe(
+      'No active order found for session'
+    );
+  });
+
+  it('initiates an STK push for the active order', async () => {
+    await arrangeArrangingPayment(shopClient);
+    mockStk('ws_CO_test_1');
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+    });
+    expect(result.initiateMpesaTransaction).toMatchObject({
+      success: true,
+      transactionId: 'ws_CO_test_1',
+    });
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('returns failure when the currency is not KES', async () => {
+    const activeChannel = await getActiveChannel(shopClient);
+    await updateChannel(adminClient, {
+      id: activeChannel.id,
+      defaultCurrencyCode: CurrencyCode.USD,
+    });
+    await arrangeArrangingPayment(shopClient);
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+    });
+    expect(result.initiateMpesaTransaction.success).toBe(false);
+    expect(result.initiateMpesaTransaction.message).toBe(
+      'Mpesa only supports KES currency'
+    );
+    await cancelActiveOrder(shopClient);
+    await updateChannel(adminClient, {
+      id: activeChannel.id,
+      defaultCurrencyCode: CurrencyCode.KES,
+    });
+  });
+
+  it('returns failure when Safaricom rejects the push', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const scope = mockStk('ws_CO_rejected', '1');
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+    });
+    expect(result.initiateMpesaTransaction.success).toBe(false);
+    expect(scope.isDone()).toBe(true);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('returns failure when Safaricom cannot be reached', async () => {
+    await arrangeArrangingPayment(shopClient);
+    nock(SANDBOX_BASE_URL)
+      .post('/mpesa/stkpush/v1/processrequest')
+      .replyWithError('Connection timeout');
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+    });
+    expect(result.initiateMpesaTransaction.success).toBe(false);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('verify returns PENDING while the checkout request is stored', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_pending');
+    const result = await shopClient.query(Verify, {
+      transactionId: 'ws_CO_pending',
+    });
+    expect(result.verifyMpesaTransaction.status).toBe('PENDING');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('verify returns FAILED when the checkout request is gone', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const result = await shopClient.query(Verify, {
+      transactionId: 'ws_CO_missing',
+    });
+    expect(result.verifyMpesaTransaction.status).toBe('FAILED');
+    expect(result.verifyMpesaTransaction.message).toBe('Payment has failed');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('verify returns SUCCESS when a payment exists', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await adminClient.query(
+      gqlTag`
+        mutation AddManualPayment($input: ManualPaymentInput!) {
+          addManualPaymentToOrder(input: $input) {
+            ... on Order {
+              id
+            }
+            ... on ErrorResult {
+              errorCode
+              message
+            }
+          }
+        }
+      `,
+      {
+        input: {
+          orderId: order.id,
+          method: 'mpesa',
+          transactionId: 'ws_CO_paid',
+          metadata: {
+            CheckoutRequestID: 'ws_CO_paid',
+            MpesaReceiptNumber: 'ws_CO_paid',
+          },
+        },
+      }
+    );
+    const result = await shopClient.query(Verify, {
+      transactionId: 'ws_CO_paid',
+    });
+    expect(result.verifyMpesaTransaction.status).toBe('SUCCESS');
+  });
+
+  it('records the outstanding balance when the callback has no stored charge', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_legacy');
+    nock(SANDBOX_BASE_URL).post('/mpesa/stkpushquery/v1/query').reply(200, {
+      ResponseCode: '0',
+      ResponseDescription: 'The service request is processed successfully.',
+      MerchantRequestID: '29115-34620561-1',
+      CheckoutRequestID: 'ws_CO_legacy',
+      ResultCode: '0',
+      ResultDesc: 'The service request is processed successfully.',
+    });
+    const response = await postCallback(
+      successCallback('ws_CO_legacy', 1, 'RCP1')
+    );
+    expect(response.status).not.toBe(500);
+    const { order: settled } = await adminClient.query(OrderPayments, {
+      id: order.id,
+    });
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].amount).toBe(order.totalWithTax);
+    expect(settled.payments[0].transactionId).toBe('ws_CO_legacy');
+    expect(settled.state).toBe('PaymentSettled');
+  });
+
+  it('clears the checkout request when the STK push fails', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_fail_early');
+    const response = await postCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: 'ws_CO_fail_early',
+          ResultCode: 1,
+          ResultDesc: 'Cancelled',
+        },
+      },
+    });
+    expect(response.status).not.toBe(500);
+    const result = await shopClient.query(Verify, {
+      transactionId: 'ws_CO_fail_early',
+    });
+    expect(result.verifyMpesaTransaction.status).toBe('FAILED');
+    await cancelActiveOrder(shopClient);
+  });
+});

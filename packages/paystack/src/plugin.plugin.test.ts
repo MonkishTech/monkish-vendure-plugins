@@ -576,4 +576,68 @@ describe('PaystackPlugin', () => {
     expect(settled.payments[0].amount).toBe(order.totalWithTax);
     expect(settled.payments[0].metadata.chargeAmount).toBe(paystackAmount);
   });
+
+  it('records an explicit settlementAmount below the balance', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const settlementAmount = Math.min(100, order.totalWithTax - 1);
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize', (body) => {
+        return (
+          body.amount === settlementAmount &&
+          body.metadata.settlement_amount === settlementAmount &&
+          body.metadata.charge_amount === settlementAmount
+        );
+      })
+      .reply(200, {
+        ...mockInitializeTransactionResponse,
+        data: {
+          ...mockInitializeTransactionResponse.data,
+          reference: 'deposit-ref',
+        },
+      });
+
+    const intent = await shopClient.query(CreatePaystackPaymentIntent, {
+      input: {
+        callbackUrl: 'https://example.com',
+        settlementAmount,
+      },
+    });
+    expect(intent.createPaystackPaymentIntent.__typename).toBe(
+      'PaystackPaymentIntent'
+    );
+
+    mockVerify(
+      'deposit-ref',
+      settlementAmount,
+      {
+        order_code: order.code,
+        charge_amount: settlementAmount,
+        settlement_amount: settlementAmount,
+      },
+      5151
+    );
+
+    const { confirmPaystackPayment } = await shopClient.query(
+      ConfirmPaystackPayment,
+      { reference: 'deposit-ref' }
+    );
+
+    expect(confirmPaystackPayment.state).not.toBe('PaymentSettled');
+    const { order: settled } = await adminClient.query(OrderPayments, {
+      id: confirmPaystackPayment.id,
+    });
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].amount).toBe(settlementAmount);
+    expect(settled.state).not.toBe('PaymentSettled');
+
+    await shopClient.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "Cancelled") {
+          ... on Order {
+            state
+          }
+        }
+      }
+    `);
+  });
 });

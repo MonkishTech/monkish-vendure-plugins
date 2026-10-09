@@ -73,5 +73,6 @@ export const shopApiSchemaExtensions: DocumentNode = graphql`
     createPaystackPaymentIntent(
       input: PaystackPaymentIntentInput!
     ): PaystackPaymentIntentResult!
+    confirmPaystackPayment(reference: String!): Order!
   }
 `;

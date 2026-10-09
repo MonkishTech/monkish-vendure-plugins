@@ -7,6 +7,7 @@ import { InitialData } from '@vendure/core';
 import {
   createTestEnvironment,
   registerInitializer,
+  SimpleGraphQLClient,
   SqljsInitializer,
 } from '@vendure/testing';
 import { PaystackPlugin } from './paystack.plugin';
@@ -53,6 +54,58 @@ export const mockInitializeTransactionResponse: Omit<
 const TEST_DB_DIR = path.join(__dirname, '../__test_db__');
 const API_PORT = 8000;
 
+const ConfirmPaystackPayment = gqlTag`
+  mutation ConfirmPaystackPayment($reference: String!) {
+    confirmPaystackPayment(reference: $reference) {
+      id
+      code
+      state
+    }
+  }
+`;
+
+const ActiveOrderForPaystack = gqlTag`
+  query ActiveOrderForPaystack {
+    activeOrder {
+      code
+      state
+      totalWithTax
+    }
+    eligibleShippingMethods {
+      id
+    }
+  }
+`;
+
+const OrderPayments = gqlTag`
+  query OrderPayments($id: ID!) {
+    order(id: $id) {
+      state
+      payments {
+        amount
+        state
+        transactionId
+        metadata
+      }
+    }
+  }
+`;
+
+function mockVerify(
+  reference: string,
+  amount: number,
+  metadata: Record<string, unknown>,
+  id = 4242
+) {
+  nock(`${PAYSTACK_API_URL}`)
+    .get(`/transaction/verify/${reference}`)
+    .reply(200, {
+      status: true,
+      message: 'Verification successful',
+      data: { id, status: 'success', amount, reference, metadata },
+    });
+}
+
 describe('PaystackPlugin', () => {
   const { server, adminClient, shopClient } = createTestEnvironment({
     ...testConfig(API_PORT),
@@ -64,6 +117,75 @@ describe('PaystackPlugin', () => {
   >['customers']['items'][number];
 
   let started = false;
+
+  async function arrangeArrangingPayment(
+    shopClient: SimpleGraphQLClient
+  ): Promise<{ code: string; totalWithTax: number }> {
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    const before = await shopClient.query(ActiveOrderForPaystack);
+    if (!before.activeOrder) {
+      await addItem(shopClient, 1, 1);
+    }
+    await shopClient.query(gqlTag`
+      mutation {
+        setOrderShippingAddress(
+          input: {
+            fullName: "Ada Lovelace"
+            streetLine1: "1 Market Street"
+            city: "Nairobi"
+            postalCode: "00100"
+            countryCode: "KE"
+          }
+        ) {
+          ... on Order {
+            id
+          }
+          ... on ErrorResult {
+            errorCode
+            message
+          }
+        }
+      }
+    `);
+    const withMethods = await shopClient.query(ActiveOrderForPaystack);
+    const shippingMethodId = withMethods.eligibleShippingMethods[0].id;
+    await shopClient.query(
+      gqlTag`
+        mutation SetShipping($ids: [ID!]!) {
+          setOrderShippingMethod(shippingMethodId: $ids) {
+            ... on Order {
+              id
+            }
+            ... on ErrorResult {
+              errorCode
+              message
+            }
+          }
+        }
+      `,
+      { ids: [shippingMethodId] }
+    );
+    const transitioned = await shopClient.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "ArrangingPayment") {
+          ... on Order {
+            code
+            state
+            totalWithTax
+          }
+          ... on OrderStateTransitionError {
+            errorCode
+            message
+          }
+        }
+      }
+    `);
+    const order = transitioned.transitionOrderToState;
+    if (order.state !== 'ArrangingPayment') {
+      throw new Error(order.message ?? 'Order did not reach ArrangingPayment');
+    }
+    return { code: order.code, totalWithTax: order.totalWithTax };
+  }
   beforeAll(async () => {
     registerInitializer('sqljs', new SqljsInitializer(TEST_DB_DIR));
 
@@ -387,5 +509,71 @@ describe('PaystackPlugin', () => {
       }
     );
     expect(res.status).toBe(200);
+  });
+
+  it('records the outstanding balance when chargeAmount is higher', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = order.totalWithTax + 400;
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, mockInitializeTransactionResponse);
+    await shopClient.query(CreatePaystackPaymentIntent, {
+      input: { callbackUrl: 'https://example.com', chargeAmount },
+    });
+    mockVerify('re4lyvq3s3', chargeAmount, {
+      order_code: order.code,
+      charge_amount: chargeAmount,
+    });
+
+    const { confirmPaystackPayment } = await shopClient.query(
+      ConfirmPaystackPayment,
+      { reference: 're4lyvq3s3' }
+    );
+
+    expect(confirmPaystackPayment.state).toBe('PaymentSettled');
+    const { order: settled } = await adminClient.query(OrderPayments, {
+      id: confirmPaystackPayment.id,
+    });
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].amount).toBe(order.totalWithTax);
+    expect(settled.payments[0].metadata.chargeAmount).toBe(chargeAmount);
+  });
+
+  it('records the outstanding balance when deprecated paystackAmount is higher', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const paystackAmount = order.totalWithTax + 400;
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, {
+        ...mockInitializeTransactionResponse,
+        data: {
+          ...mockInitializeTransactionResponse.data,
+          reference: 'fee-alias-ref',
+        },
+      });
+    await shopClient.query(CreatePaystackPaymentIntent, {
+      input: { callbackUrl: 'https://example.com', paystackAmount },
+    });
+    mockVerify(
+      'fee-alias-ref',
+      paystackAmount,
+      {
+        order_code: order.code,
+        charge_amount: paystackAmount,
+      },
+      4343
+    );
+
+    const { confirmPaystackPayment } = await shopClient.query(
+      ConfirmPaystackPayment,
+      { reference: 'fee-alias-ref' }
+    );
+
+    expect(confirmPaystackPayment.state).toBe('PaymentSettled');
+    const { order: settled } = await adminClient.query(OrderPayments, {
+      id: confirmPaystackPayment.id,
+    });
+    expect(settled.payments[0].amount).toBe(order.totalWithTax);
+    expect(settled.payments[0].metadata.chargeAmount).toBe(paystackAmount);
   });
 });

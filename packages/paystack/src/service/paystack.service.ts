@@ -5,9 +5,9 @@ import {
 } from '@vendure/common/lib/generated-types';
 import {
   ActiveOrderService,
-  ChannelService,
   CreateRefundResult,
   InternalServerError,
+  isGraphQlErrorResult,
   LanguageCode,
   Logger,
   Order,
@@ -16,6 +16,7 @@ import {
   Payment,
   PaymentMethod,
   PaymentMethodService,
+  PaymentService,
   RequestContext,
   RequestContextService,
   TransactionalConnection,
@@ -42,6 +43,28 @@ import {
   TransactionEvent,
   VerificationResponse,
 } from '../types';
+
+export class PaystackSettleRejection extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PaystackSettleRejection';
+  }
+}
+
+function orderCodeFromMetadata(
+  metadata: Record<string, unknown> | null
+): string | undefined {
+  const value = metadata?.[PAYSTACK_ORDER_CODE_METADATA_KEY];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function numberFromMetadata(
+  metadata: Record<string, unknown> | null,
+  key: string
+): number | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'number' ? value : undefined;
+}
 
 function outstandingBalance(order: Order): number {
   const covered = (order.payments ?? [])
@@ -111,10 +134,10 @@ function secretKeyFromHandler(
 export class PaystackService {
   constructor(
     private activeOrderService: ActiveOrderService,
-    private channelService: ChannelService,
     private connection: TransactionalConnection,
     private orderService: OrderService,
     private paymentMethodService: PaymentMethodService,
+    private paymentService: PaymentService,
     private requestContextService: RequestContextService
   ) {}
 
@@ -267,7 +290,14 @@ export class PaystackService {
   async verifyTransaction(
     secretKey: string,
     transactionReference: string
-  ): Promise<boolean> {
+  ): Promise<
+    | {
+        id: number;
+        amount: number;
+        metadata: Record<string, unknown> | null;
+      }
+    | undefined
+  > {
     const client = this.createPaystackClient(secretKey);
     try {
       const {
@@ -276,16 +306,17 @@ export class PaystackService {
       } = await client.get<VerificationResponse>(
         `/transaction/verify/${transactionReference}`
       );
-
-      if (status !== 200) {
-        Logger.error(
-          `Could not verify transaction with reference: ${transactionReference}`,
-          loggerCtx
-        );
-        return false;
+      if (status !== 200 || data.status !== 'success') {
+        return undefined;
       }
-
-      return data.status === 'success';
+      return {
+        id: data.id,
+        amount: data.amount,
+        metadata:
+          data.metadata && typeof data.metadata === 'object'
+            ? (data.metadata as Record<string, unknown>)
+            : null,
+      };
     } catch (error) {
       Logger.error(
         `Could not verify transaction with reference: ${transactionReference}`,
@@ -295,8 +326,7 @@ export class PaystackService {
         JSON.stringify((error as AxiosError).toJSON(), null, 2),
         loggerCtx
       );
-
-      return false;
+      return undefined;
     }
   }
 
@@ -385,83 +415,159 @@ export class PaystackService {
     event: TransactionEvent,
     webhookSecretKey: string
   ): Promise<void> {
-    const isTransactionSuccessful = await this.verifyTransaction(
+    const verified = await this.verifyTransaction(
       webhookSecretKey,
       event.data.reference
     );
-    if (!isTransactionSuccessful) return;
-
+    if (!verified) {
+      return;
+    }
     const outerCtx = await this.createContext();
+    await this.connection.withTransaction(outerCtx, async (ctx) => {
+      await this.settleVerifiedCharge(ctx, verified);
+    });
+  }
 
-    this.connection.withTransaction(outerCtx, async (ctx: RequestContext) => {
-      const meta = event.data.metadata;
-      const orderCode =
-        meta &&
-        typeof meta === 'object' &&
-        !Array.isArray(meta) &&
-        typeof (meta as Record<string, unknown>)[
-          PAYSTACK_ORDER_CODE_METADATA_KEY
-        ] === 'string'
-          ? String(
-              (meta as Record<string, unknown>)[PAYSTACK_ORDER_CODE_METADATA_KEY]
-            )
-          : undefined;
-      if (!orderCode) {
-        Logger.error(
-          `Paystack charge.success missing ${PAYSTACK_ORDER_CODE_METADATA_KEY} in metadata (reference ${event.data.reference})`,
-          loggerCtx
-        );
-        return;
+  async confirmPayment(ctx: RequestContext, reference: string): Promise<Order> {
+    const trimmed = reference.trim();
+    if (!trimmed) {
+      throw new UserInputError('Payment reference is required');
+    }
+    const sessionOrder = await this.activeOrderService.getActiveOrder(
+      ctx,
+      undefined
+    );
+    if (!sessionOrder) {
+      throw new UserInputError('No active order found for session');
+    }
+    const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
+    const secretKey = secretKeyFromHandler(paymentMethod.handler);
+    if (!secretKey) {
+      throw new InternalServerError(
+        `[${loggerCtx}] Paystack payment method "${paymentMethod.code}" has no secret key configured.`
+      );
+    }
+    const verified = await this.verifyTransaction(secretKey, trimmed);
+    if (!verified) {
+      throw new UserInputError('Paystack payment was not successful');
+    }
+    const orderCode = orderCodeFromMetadata(verified.metadata);
+    if (orderCode !== sessionOrder.code) {
+      throw new UserInputError('Payment reference does not match this order');
+    }
+    const adminCtx = await this.createContext();
+    try {
+      return await this.connection.withTransaction(adminCtx, async (txCtx) =>
+        this.settleVerifiedCharge(txCtx, verified)
+      );
+    } catch (error) {
+      if (error instanceof PaystackSettleRejection) {
+        throw new UserInputError(error.message);
       }
+      throw error;
+    }
+  }
 
-      const order = await this.orderService.findOneByCode(ctx, orderCode);
-      if (!order) return;
-
-      if (order.state !== 'ArrangingPayment') {
-        const defaultChannel = await this.channelService.getDefaultChannel(ctx);
-        const ctxWithDefaultChannel = await this.createContext(
-          defaultChannel.token
-        );
-
-        const transitionToStateResult =
-          await this.orderService.transitionToState(
-            ctxWithDefaultChannel,
-            order.id,
-            'ArrangingPayment'
-          );
-
-        if (transitionToStateResult instanceof OrderStateTransitionError) {
-          Logger.error(
-            `Error transitioning order ${order.code} to ArrangingPayment state: ${transitionToStateResult.message}`,
-            loggerCtx
-          );
-          return;
-        }
-      }
-
-      const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
-
-      const addPaymentToOrderResult = await this.orderService.addPaymentToOrder(
+  private async settleVerifiedCharge(
+    ctx: RequestContext,
+    verified: {
+      id: number;
+      amount: number;
+      metadata: Record<string, unknown> | null;
+    }
+  ): Promise<Order> {
+    const orderCode = orderCodeFromMetadata(verified.metadata);
+    if (!orderCode) {
+      throw new PaystackSettleRejection(
+        `Paystack charge is missing ${PAYSTACK_ORDER_CODE_METADATA_KEY}.`
+      );
+    }
+    const found = await this.orderService.findOneByCode(ctx, orderCode);
+    if (!found) {
+      throw new Error(`Paystack order ${orderCode} could not be loaded.`);
+    }
+    const order = await this.orderService.findOne(ctx, found.id, ['payments']);
+    if (!order) {
+      throw new Error(`Paystack order ${orderCode} could not be loaded.`);
+    }
+    if (order.state === 'PaymentSettled') {
+      return order;
+    }
+    const transactionId = String(verified.id);
+    const existing = await this.connection.getRepository(ctx, Payment).findOne({
+      where: { transactionId },
+    });
+    if (existing) {
+      return order;
+    }
+    const chargeAmount = numberFromMetadata(
+      verified.metadata,
+      CHARGE_AMOUNT_METADATA_KEY
+    );
+    if (chargeAmount != null && verified.amount !== chargeAmount) {
+      throw new PaystackSettleRejection(
+        'Verified Paystack amount does not match charge_amount.'
+      );
+    }
+    if (order.state !== 'ArrangingPayment') {
+      const transitioned = await this.orderService.transitionToState(
         ctx,
         order.id,
-        {
-          method: paymentMethod.code,
-          metadata: {
-            transactionId: event.data.id,
-          },
-        }
+        'ArrangingPayment'
       );
-
-      if (!(addPaymentToOrderResult instanceof Order)) {
-        Logger.error(
-          `Error adding payment to order ${order.code}: ${addPaymentToOrderResult.message}`,
-          loggerCtx
-        );
-        return;
+      if (transitioned instanceof OrderStateTransitionError) {
+        throw new PaystackSettleRejection(transitioned.message);
       }
-
-      Logger.info(`Paystack payment added to order ${order.code}`, loggerCtx);
-    });
+    }
+    const fresh = await this.orderService.findOne(ctx, order.id, ['payments']);
+    if (!fresh) {
+      throw new Error(`Paystack order ${orderCode} could not be loaded.`);
+    }
+    const outstanding = outstandingBalance(fresh);
+    const explicitSettlement = numberFromMetadata(
+      verified.metadata,
+      SETTLEMENT_AMOUNT_METADATA_KEY
+    );
+    const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
+    const metadata = {
+      transactionId,
+      ...(chargeAmount != null ? { chargeAmount } : {}),
+    };
+    if (explicitSettlement == null) {
+      if (chargeAmount != null && outstanding > chargeAmount) {
+        throw new PaystackSettleRejection(
+          'Outstanding balance is greater than chargeAmount.'
+        );
+      }
+      const added = await this.orderService.addPaymentToOrder(ctx, fresh.id, {
+        method: paymentMethod.code,
+        metadata,
+      });
+      if (!(added instanceof Order)) {
+        throw new PaystackSettleRejection(added.message);
+      }
+      return added;
+    }
+    if (explicitSettlement > outstanding) {
+      throw new PaystackSettleRejection(
+        'settlementAmount cannot exceed the outstanding balance.'
+      );
+    }
+    const payment = await this.paymentService.createPayment(
+      ctx,
+      fresh,
+      explicitSettlement,
+      paymentMethod.code,
+      metadata
+    );
+    if (isGraphQlErrorResult(payment)) {
+      throw new PaystackSettleRejection(payment.message);
+    }
+    const settled = await this.orderService.findOne(ctx, fresh.id);
+    if (!settled) {
+      throw new Error(`Paystack order ${orderCode} could not be loaded.`);
+    }
+    return settled;
   }
 
   async handleRefundEvent({ data, event }: RefundEvent): Promise<void> {

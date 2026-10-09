@@ -154,6 +154,7 @@ export type VerificationResponse = PaystackResponse & {
     createdAt: string;
     requested_amount: number;
     transaction_date: string;
+    metadata?: Record<string, unknown> | null;
   };
 };
 

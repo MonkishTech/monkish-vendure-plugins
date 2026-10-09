@@ -5,6 +5,8 @@ import { CustomOrderFields } from '@vendure/core/dist/entity/custom-entity-field
 declare module '@vendure/core/dist/entity/custom-entity-fields' {
   interface CustomOrderFields {
     mpesaCheckoutRequestID: string | null;
+    mpesaChargeAmount: number | null;
+    mpesaSettlementAmount: number | null;
   }
 }
 

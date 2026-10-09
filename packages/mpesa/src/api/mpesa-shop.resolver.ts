@@ -21,13 +21,21 @@ export class MpesaShopResolver {
   @Allow(Permission.Owner)
   async initiateMpesaTransaction(
     @Ctx() ctx: RequestContext,
-    @Args() args: { phoneNumber: string }
+    @Args()
+    args: {
+      phoneNumber: string;
+      chargeAmount?: number | null;
+      settlementAmount?: number | null;
+    }
   ): Promise<MpesaTransactionInitiation> {
     if (!ctx.authorizedAsOwnerOnly) {
       throw new UnauthorizedError();
     }
 
-    return this.mpesaService.initiateStkPush(ctx, args.phoneNumber);
+    return this.mpesaService.initiateStkPush(ctx, args.phoneNumber, {
+      chargeAmount: args.chargeAmount,
+      settlementAmount: args.settlementAmount,
+    });
   }
 
   @Mutation()

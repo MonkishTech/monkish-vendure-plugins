@@ -20,7 +20,13 @@ export const shopApiExtensions = gql`
   }
 
   extend type Mutation {
-    initiateMpesaTransaction(phoneNumber: String!): MpesaTransactionInitiation!
+    initiateMpesaTransaction(
+      phoneNumber: String!
+      "What M-Pesa collects, in minor units. Defaults to the settlement amount rounded up to the next shilling."
+      chargeAmount: Money
+      "What is written to Payment.amount. Defaults to the outstanding balance. Cannot exceed it."
+      settlementAmount: Money
+    ): MpesaTransactionInitiation!
 
     verifyMpesaTransaction(
       transactionId: String!

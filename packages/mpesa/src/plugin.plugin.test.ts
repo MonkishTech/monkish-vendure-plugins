@@ -72,8 +72,16 @@ const mpesaTestInitialData: InitialData = {
 };
 
 const Initiate = gqlTag`
-  mutation Initiate($phoneNumber: String!) {
-    initiateMpesaTransaction(phoneNumber: $phoneNumber) {
+  mutation Initiate(
+    $phoneNumber: String!
+    $chargeAmount: Money
+    $settlementAmount: Money
+  ) {
+    initiateMpesaTransaction(
+      phoneNumber: $phoneNumber
+      chargeAmount: $chargeAmount
+      settlementAmount: $settlementAmount
+    ) {
       success
       transactionId
       message
@@ -298,6 +306,44 @@ describe('Mpesa Plugin', () => {
     };
   }
 
+  function captureStk(checkoutRequestId: string) {
+    let body: { Amount?: number } | undefined;
+    nock(SANDBOX_BASE_URL)
+      .post('/mpesa/stkpush/v1/processrequest', (captured) => {
+        body = captured as { Amount?: number };
+        return true;
+      })
+      .reply(200, {
+        MerchantRequestID: '29115-34620561-1',
+        CheckoutRequestID: checkoutRequestId,
+        ResponseCode: '0',
+        ResponseDescription: 'Success. Request accepted for processing',
+        CustomerMessage: 'ok',
+      });
+    return () => body;
+  }
+
+  async function readMpesaFields(orderId: string) {
+    const orderService = server.app.get(OrderService);
+    const requestContextService = server.app.get(RequestContextService);
+    const ctx = await requestContextService.create({ apiType: 'admin' });
+    const id = Number.parseInt(orderId.replace(/^T_/, ''), 10);
+    const order = await orderService.findOne(ctx, id);
+    if (!order) {
+      throw new Error(`Order ${orderId} was not found`);
+    }
+    const fields = order.customFields as {
+      mpesaCheckoutRequestID: string | null;
+      mpesaChargeAmount?: number | null;
+      mpesaSettlementAmount?: number | null;
+    };
+    return {
+      mpesaCheckoutRequestID: fields.mpesaCheckoutRequestID,
+      mpesaChargeAmount: fields.mpesaChargeAmount ?? null,
+      mpesaSettlementAmount: fields.mpesaSettlementAmount ?? null,
+    };
+  }
+
   function mockStk(checkoutRequestId: string, responseCode = '0') {
     return nock(SANDBOX_BASE_URL)
       .post('/mpesa/stkpush/v1/processrequest')
@@ -477,6 +523,76 @@ describe('Mpesa Plugin', () => {
       transactionId: 'ws_CO_fail_early',
     });
     expect(result.verifyMpesaTransaction.status).toBe('FAILED');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rounds a phone-only charge up to the next shilling and stores it', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    const sent = captureStk('ws_CO_round');
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+    });
+    expect(result.initiateMpesaTransaction.success).toBe(true);
+    expect(sent()?.Amount).toBe(chargeAmount / 100);
+    const stored = await readMpesaFields(order.id);
+    expect(stored.mpesaChargeAmount).toBe(chargeAmount);
+    expect(stored.mpesaSettlementAmount).toBeNull();
+    expect(stored.mpesaCheckoutRequestID).toBe('ws_CO_round');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a chargeAmount that is not a whole number of shillings', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const sent = captureStk('ws_CO_bad');
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+      chargeAmount: 150,
+    });
+    expect(result.initiateMpesaTransaction).toMatchObject({
+      success: false,
+      message: 'chargeAmount must be a whole number of shillings.',
+    });
+    expect(sent()).toBeUndefined();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a settlementAmount above the outstanding balance', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+      settlementAmount: 2_000_000_000,
+    });
+    expect(result.initiateMpesaTransaction.message).toBe(
+      'settlementAmount cannot exceed the outstanding balance.'
+    );
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a settlementAmount of zero', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+      settlementAmount: 0,
+    });
+    expect(result.initiateMpesaTransaction).toMatchObject({
+      success: false,
+      message: 'settlementAmount must be a positive integer.',
+    });
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a chargeAmount below the settlement amount', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const result = await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+      settlementAmount: 200,
+      chargeAmount: 100,
+    });
+    expect(result.initiateMpesaTransaction).toMatchObject({
+      success: false,
+      message: 'chargeAmount cannot be less than the settlement amount.',
+    });
     await cancelActiveOrder(shopClient);
   });
 });

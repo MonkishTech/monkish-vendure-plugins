@@ -38,6 +38,56 @@ import {
 } from '../types';
 import { formatPhoneNumber } from '../util/phone-utils';
 
+function outstandingBalance(order: Order): number {
+  const covered = (order.payments ?? [])
+    .filter((payment) => payment.state === 'Settled')
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  return order.totalWithTax - covered;
+}
+
+function roundUpToShilling(minor: number): number {
+  return Math.ceil(minor / 100) * 100;
+}
+
+function resolveMpesaAmounts(
+  input: { chargeAmount?: number | null; settlementAmount?: number | null },
+  outstanding: number
+):
+  | { chargeAmount: number; settlementAmount: number | null }
+  | { message: string } {
+  const { chargeAmount, settlementAmount } = input;
+  if (settlementAmount != null) {
+    if (!Number.isInteger(settlementAmount) || settlementAmount <= 0) {
+      return { message: 'settlementAmount must be a positive integer.' };
+    }
+    if (settlementAmount > outstanding) {
+      return {
+        message: 'settlementAmount cannot exceed the outstanding balance.',
+      };
+    }
+  }
+  const settlement = settlementAmount ?? outstanding;
+  if (!Number.isInteger(settlement) || settlement <= 0) {
+    return { message: 'settlementAmount must be a positive integer.' };
+  }
+  const charge = chargeAmount ?? roundUpToShilling(settlement);
+  if (!Number.isInteger(charge) || charge <= 0) {
+    return { message: 'chargeAmount must be a positive integer.' };
+  }
+  if (charge % 100 !== 0) {
+    return { message: 'chargeAmount must be a whole number of shillings.' };
+  }
+  if (charge < settlement) {
+    return {
+      message: 'chargeAmount cannot be less than the settlement amount.',
+    };
+  }
+  return {
+    chargeAmount: charge,
+    settlementAmount: settlementAmount == null ? null : settlementAmount,
+  };
+}
+
 @Injectable()
 export class MpesaService {
   private _accessTokenCache = new Map<
@@ -53,7 +103,11 @@ export class MpesaService {
 
   async initiateStkPush(
     ctx: RequestContext,
-    phoneNumber: string
+    phoneNumber: string,
+    input: {
+      chargeAmount?: number | null;
+      settlementAmount?: number | null;
+    } = {}
   ): Promise<MpesaTransactionInitiation> {
     const sessionOrder = await this.activeOrderService.getActiveOrder(
       ctx,
@@ -69,6 +123,7 @@ export class MpesaService {
 
     const order = await this.orderService.findOne(ctx, sessionOrder.id, [
       'customer',
+      'payments',
     ]);
     if (!order) {
       return {
@@ -78,7 +133,7 @@ export class MpesaService {
       };
     }
 
-    const { totalWithTax, customer, currencyCode, code } = order;
+    const { customer, currencyCode, code } = order;
     if (!customer) {
       return {
         success: false,
@@ -92,6 +147,15 @@ export class MpesaService {
         success: false,
         transactionId: '',
         message: 'Mpesa only supports KES currency',
+      };
+    }
+
+    const resolved = resolveMpesaAmounts(input, outstandingBalance(order));
+    if ('message' in resolved) {
+      return {
+        success: false,
+        transactionId: '',
+        message: resolved.message,
       };
     }
 
@@ -115,7 +179,7 @@ export class MpesaService {
           Password: this.getLnmPassword(config, timestamp),
           Timestamp: timestamp,
           TransactionType: transactionType,
-          Amount: Math.trunc(totalWithTax / 100),
+          Amount: resolved.chargeAmount / 100,
           PartyA: formattedPhoneNumber,
           PartyB: config.shortCode,
           PhoneNumber: formattedPhoneNumber,
@@ -135,6 +199,8 @@ export class MpesaService {
 
       await this.orderService.updateCustomFields(ctx, order.id, {
         mpesaCheckoutRequestID: data.CheckoutRequestID,
+        mpesaChargeAmount: resolved.chargeAmount,
+        mpesaSettlementAmount: resolved.settlementAmount,
       });
 
       return {

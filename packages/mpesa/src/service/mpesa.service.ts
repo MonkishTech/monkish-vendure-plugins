@@ -483,6 +483,19 @@ export class MpesaService {
       };
     }
 
+    const receipt = payment.metadata.mpesaReceiptNumber;
+    if (typeof receipt !== 'string' || receipt.length === 0) {
+      return {
+        state: 'Failed',
+        transactionId: '',
+      };
+    }
+    const chargeAmount = payment.metadata.chargeAmount;
+    const amountShillings =
+      typeof chargeAmount === 'number'
+        ? chargeAmount / 100
+        : Math.trunc(payment.amount / 100);
+
     try {
       const config = await this.getMpesaConfig(ctx);
       const client = await this.getRequestClient(config);
@@ -498,21 +511,21 @@ export class MpesaService {
           SecurityCredential: this.getSecurityCredential(config),
           QueueTimeOutURL: `${config.vendureHost}/${REVERSAL_CALLBACK_ENDPOINT}`,
           ResultURL: `${config.vendureHost}/${REVERSAL_CALLBACK_ENDPOINT}`,
-          TransactionID: payment.metadata.MpesaReceiptNumber,
-          Amount: Math.trunc(payment.amount / 100),
+          TransactionID: receipt,
+          Amount: amountShillings,
         }
       );
 
       if (data.ResponseCode !== '0') {
         return {
           state: 'Failed',
-          transactionId: payment.metadata.MpesaReceiptNumber,
+          transactionId: receipt,
         };
       }
 
       return {
         state: 'Validating',
-        transactionId: payment.metadata.MpesaReceiptNumber,
+        transactionId: receipt,
         metadata: {
           conversationID: data.OriginatorConversationID,
         },
@@ -524,7 +537,7 @@ export class MpesaService {
       }
       return {
         state: 'Failed',
-        transactionId: payment.metadata.MpesaReceiptNumber,
+        transactionId: receipt,
       };
     }
   }

@@ -823,4 +823,109 @@ describe('Mpesa Plugin', () => {
     expect(stored.mpesaSettlementAmount).toBeNull();
     await cancelActiveOrder(shopClient);
   });
+
+  it('reverses the collected shillings', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_refund');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    mockStkQuery('ws_CO_refund');
+    await postCallback(
+      successCallback('ws_CO_refund', chargeAmount / 100, 'RCPREV')
+    );
+
+    let reversal: { TransactionID?: string; Amount?: number } = {};
+    nock(SANDBOX_BASE_URL)
+      .post('/mpesa/reversal/v1/request', (body) => {
+        reversal = body as { TransactionID?: string; Amount?: number };
+        return true;
+      })
+      .reply(200, {
+        OriginatorConversationID: '29115-34620561-1',
+        ConversationID: 'AG_20210727_00005797af5d7d75f652',
+        ResponseCode: '0',
+        ResponseDescription: 'Accept the service request successfully.',
+      });
+
+    const paid = await adminClient.query(
+      gqlTag`
+        query PaidOrder($id: ID!) {
+          order(id: $id) {
+            payments {
+              id
+            }
+          }
+        }
+      `,
+      { id: order.id }
+    );
+    const refunded = await adminClient.query(
+      gqlTag`
+        mutation RefundOrder($input: RefundOrderInput!) {
+          refundOrder(input: $input) {
+            ... on Refund {
+              __typename
+              state
+              transactionId
+            }
+            ... on ErrorResult {
+              errorCode
+              message
+            }
+          }
+        }
+      `,
+      {
+        input: {
+          paymentId: paid.order.payments[0].id,
+          amount: order.totalWithTax,
+          shipping: 0,
+          adjustment: 0,
+        },
+      }
+    );
+    expect(refunded.refundOrder).toMatchObject({
+      __typename: 'Refund',
+      state: 'Validating',
+      transactionId: 'RCPREV',
+    });
+    expect(reversal.TransactionID).toBe('RCPREV');
+    expect(reversal.Amount).toBe(chargeAmount / 100);
+
+    const callback = await shopClient.fetch(
+      `http://localhost:${API_PORT}/daraja/reversal/callback`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          Result: {
+            ResultType: 0,
+            ResultCode: '0',
+            ResultDesc: 'The service request is processed successfully.',
+            OriginatorConversationID: '29115-34620561-1',
+            ConversationID: 'AG_20210727_00005797af5d7d75f652',
+            TransactionID: 'RCPREV',
+            ResultParameters: { ResultParameter: [] },
+            ReferenceData: { ReferenceItem: { Key: '', Value: '' } },
+          },
+        }),
+      }
+    );
+    expect(callback.status).toBeLessThan(500);
+    const after = await adminClient.query(
+      gqlTag`
+        query RefundedOrder($id: ID!) {
+          order(id: $id) {
+            payments {
+              refunds {
+                state
+              }
+            }
+          }
+        }
+      `,
+      { id: order.id }
+    );
+    expect(after.order.payments[0].refunds[0].state).toBe('Settled');
+  });
 });

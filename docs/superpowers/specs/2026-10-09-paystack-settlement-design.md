@@ -1,6 +1,6 @@
 # Paystack settlement amounts
 
-Phase 1 of instalment payments. This spec covers the Paystack plugin only. The instalments plugin, the M-Pesa plugin, and tip surcharges in host apps come later.
+Phase 1 of instalment payments. This spec covers the Paystack plugin and its README. The instalments plugin, the M-Pesa plugin, and tip surcharges in host apps come later.
 
 ## Problem
 
@@ -99,6 +99,34 @@ Tests stay in the existing `PaystackPlugin` end-to-end suite, with Paystack mock
 - When the verified Paystack amount differs from `charge_amount`, confirm throws and no payment is recorded. The webhook answers 200.
 - When `settlement_amount` is absent and the outstanding balance is greater than `charge_amount`, confirm throws and no payment is recorded. The webhook answers 200.
 - A transaction with no `charge_amount` in metadata still settles the outstanding balance.
+
+## Documentation
+
+`packages/paystack/README.md` is rewritten in this change. It keeps the logo and the status badges. It is the integration guide for a store that installs the plugin. It does not describe Tikozetu, Gecotribe, or the instalments plugin.
+
+The README must correct `PaystackPlugin.init()`. The class has no `init` method. Registration is `plugins: [PaystackPlugin]`.
+
+Sections, in this order:
+
+1. **What it does.** The plugin initializes a Paystack transaction, verifies it, and records a Vendure payment. The webhook and `confirmPaystackPayment` share that settlement. Money collected by Paystack and money recorded on the order are separate amounts.
+
+2. **Installation.** `yarn add @monkish/vendure-paystack-plugin`.
+
+3. **Server setup.** Register `PaystackPlugin`. Create one payment method with the **Paystack payments** handler and set `secretKey`. Select the eligibility checker **Check whether Paystack supports the payment**. Supported currencies are `NGN`, `USD`, `GHS`, `ZAR`, and `KES`. The plugin expects one Paystack payment method. Set the Paystack webhook URL to `https://<vendure-host>/payments/paystack`. The webhook checks `x-paystack-signature` with that method’s secret key.
+
+4. **Checkout.** The active order needs a customer and a shipping method, then `ArrangingPayment`. The storefront calls `createPaystackPaymentIntent`, opens [Paystack Popup](https://paystack.com/docs/payments/accept-payments/#popup) with `access_code`, and on success calls `confirmPaystackPayment` with the transaction reference. The webhook settles the same charge if confirm does not run. A second confirm or webhook for the same Paystack transaction does not add another payment.
+
+5. **Amounts.** All amounts are minor units. Document `chargeAmount`, `settlementAmount`, and deprecated `paystackAmount`, including the defaults and the validation rules in this spec. Include these cases:
+   - Omit both amounts. Paystack is charged the outstanding balance and that balance is recorded.
+   - A processor fee. Pass `chargeAmount` above the balance, for example `round(totalWithTax * 1.04)`. `Payment.amount` stays the outstanding balance. `chargeAmount` is stored on the payment metadata for reconciliation.
+   - A deposit. Pass `settlementAmount` below the balance. Paystack is charged that amount unless `chargeAmount` is higher. The order stays out of `PaymentSettled` until later payments cover `totalWithTax`.
+   - A tip is a surcharge the host adds before initialize. The plugin does not add one.
+
+6. **Mutations.** Show `createPaystackPaymentIntent` and `confirmPaystackPayment`, including `PaystackPaymentIntent`, `PaystackPaymentIntentError`, and the `Order` fields `id`, `code`, and `state`. List `channels`: `card`, `bank`, `ussd`, `qr`, `mobile_money`, `bank_transfer`, `eft`. Document the initialize error messages and the confirm `UserInputError` cases from this spec. State the webhook status codes: 400 for a bad signature, 200 for a settle rejection, 500 when the order cannot be loaded or the database cannot be reached.
+
+7. **Refunds.** A Vendure refund calls Paystack and is created as `Pending`. The `refund.processed` webhook settles it. `refund.failed` marks it failed. `refund.pending` is acknowledged and leaves the refund pending.
+
+8. **Upgrade.** Hosts that copied `SettlePaystackPaymentService` and declared their own `confirmPaystackPayment` delete that mutation and service. The plugin now provides the mutation. Existing storefront queries that select `id`, `code`, and `state` keep working. `paystackAmount` keeps working and is deprecated in favor of `chargeAmount`.
 
 ## Out of scope
 

@@ -19,6 +19,8 @@ export type PaystackPaymentIntentInput = VariablesOf<
   typeof CreatePaystackPaymentIntent
 >['input'] & {
   paystackAmount?: number | null;
+  chargeAmount?: number | null;
+  settlementAmount?: number | null;
 };
 
 export type PaystackPaymentIntentResult = ResultOf<

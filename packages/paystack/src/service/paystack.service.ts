@@ -24,9 +24,11 @@ import {
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { paystackPaymentMethodHandler } from '../config/paystack.handler';
 import {
+  CHARGE_AMOUNT_METADATA_KEY,
   loggerCtx,
   PAYSTACK_API_URL,
   PAYSTACK_ORDER_CODE_METADATA_KEY,
+  SETTLEMENT_AMOUNT_METADATA_KEY,
   SUPPORTED_CURRENCICES,
 } from '../constants';
 import {
@@ -40,6 +42,55 @@ import {
   TransactionEvent,
   VerificationResponse,
 } from '../types';
+
+function outstandingBalance(order: Order): number {
+  const covered = (order.payments ?? [])
+    .filter((payment) => payment.state === 'Settled')
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  return order.totalWithTax - covered;
+}
+
+function resolvePaystackAmounts(
+  input: PaystackPaymentIntentInput,
+  outstanding: number
+): { chargeAmount: number; settlementAmount?: number } | PaymentIntentError {
+  const { chargeAmount, paystackAmount, settlementAmount } = input;
+  if (
+    chargeAmount != null &&
+    paystackAmount != null &&
+    chargeAmount !== paystackAmount
+  ) {
+    return new PaymentIntentError(
+      'chargeAmount and paystackAmount must match.'
+    );
+  }
+  if (settlementAmount != null) {
+    if (!Number.isInteger(settlementAmount) || settlementAmount <= 0) {
+      return new PaymentIntentError(
+        'settlementAmount must be a positive integer.'
+      );
+    }
+    if (settlementAmount > outstanding) {
+      return new PaymentIntentError(
+        'settlementAmount cannot exceed the outstanding balance.'
+      );
+    }
+  }
+  const settlement = settlementAmount ?? outstanding;
+  const charge = chargeAmount ?? paystackAmount ?? settlement;
+  if (!Number.isInteger(charge) || charge <= 0) {
+    return new PaymentIntentError('chargeAmount must be a positive integer.');
+  }
+  if (charge < settlement) {
+    return new PaymentIntentError(
+      'chargeAmount cannot be less than the settlement amount.'
+    );
+  }
+  return {
+    chargeAmount: charge,
+    settlementAmount: settlementAmount == null ? undefined : settlementAmount,
+  };
+}
 
 class PaymentIntentError implements PaystackPaymentIntentError {
   __typename = 'PaystackPaymentIntentError' as const;
@@ -130,6 +181,7 @@ export class PaystackService {
 
     const order = await this.orderService.findOne(ctx, sessionOrder.id, [
       'customer',
+      'payments',
     ]);
     if (!order) {
       throw new UserInputError('No order found for active session');
@@ -139,9 +191,8 @@ export class PaystackService {
       channels,
       callbackUrl,
       metadata,
-      paystackAmount,
     } = input;
-    const { totalWithTax, customer, currencyCode, code } = order;
+    const { customer, currencyCode, code } = order;
 
     if (!customer) {
       throw new UserInputError('No customer found for active order');
@@ -162,12 +213,9 @@ export class PaystackService {
       );
     }
 
-    let amountToCharge = totalWithTax;
-    if (paystackAmount != null) {
-      if (!Number.isInteger(paystackAmount) || paystackAmount <= 0) {
-        throw new UserInputError('paystackAmount must be a positive integer.');
-      }
-      amountToCharge = paystackAmount;
+    const resolved = resolvePaystackAmounts(input, outstandingBalance(order));
+    if (resolved instanceof PaymentIntentError) {
+      return resolved;
     }
 
     const userMeta =
@@ -180,6 +228,10 @@ export class PaystackService {
     const mergedMetadata = {
       ...userMeta,
       [PAYSTACK_ORDER_CODE_METADATA_KEY]: code,
+      [CHARGE_AMOUNT_METADATA_KEY]: resolved.chargeAmount,
+      ...(resolved.settlementAmount != null
+        ? { [SETTLEMENT_AMOUNT_METADATA_KEY]: resolved.settlementAmount }
+        : {}),
     };
 
     try {
@@ -187,7 +239,7 @@ export class PaystackService {
       const { data, status } = await client.post<PaystackPaymentIntent>(
         '/transaction/initialize',
         {
-          amount: amountToCharge,
+          amount: resolved.chargeAmount,
           email: customer.emailAddress,
           currency: currencyCode,
           callback_url: callbackUrl,

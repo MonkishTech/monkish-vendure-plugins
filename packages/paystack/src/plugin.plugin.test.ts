@@ -185,6 +185,126 @@ describe('PaystackPlugin', () => {
     );
   });
 
+  function captureInitialize() {
+    let body: { amount?: number; metadata?: Record<string, unknown> } = {};
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize', (payload) => {
+        body = payload;
+        return true;
+      })
+      .reply(200, mockInitializeTransactionResponse);
+    return () => body;
+  }
+
+  it('sends chargeAmount to Paystack and stores charge_amount', async () => {
+    const sent = captureInitialize();
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    await addItem(shopClient, 1, 1);
+    const { activeOrder } = await shopClient.query(gqlTag`
+      query {
+        activeOrder {
+          totalWithTax
+        }
+      }
+    `);
+    const chargeAmount = activeOrder.totalWithTax + 400;
+
+    const { createPaystackPaymentIntent } = await shopClient.query(
+      CreatePaystackPaymentIntent,
+      {
+        input: {
+          callbackUrl: 'https://example.com',
+          chargeAmount,
+        },
+      }
+    );
+
+    expect(createPaystackPaymentIntent.__typename).toBe('PaystackPaymentIntent');
+    expect(sent().amount).toBe(chargeAmount);
+    expect(sent().metadata?.charge_amount).toBe(chargeAmount);
+    expect(sent().metadata?.settlement_amount).toBeUndefined();
+  });
+
+  it('rejects chargeAmount and paystackAmount when they differ', async () => {
+    const scope = nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, mockInitializeTransactionResponse);
+
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    const { createPaystackPaymentIntent } = await shopClient.query(
+      CreatePaystackPaymentIntent,
+      {
+        input: {
+          callbackUrl: 'https://example.com',
+          chargeAmount: 100,
+          paystackAmount: 200,
+        },
+      }
+    );
+
+    expect(createPaystackPaymentIntent.__typename).toBe(
+      'PaystackPaymentIntentError'
+    );
+    expect(createPaystackPaymentIntent.message).toBe(
+      'chargeAmount and paystackAmount must match.'
+    );
+    expect(scope.isDone()).toBe(false);
+    nock.cleanAll();
+  });
+
+  it('rejects a settlementAmount above the outstanding balance without calling Paystack', async () => {
+    const scope = nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, mockInitializeTransactionResponse);
+
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    const { createPaystackPaymentIntent } = await shopClient.query(
+      CreatePaystackPaymentIntent,
+      {
+        input: {
+          callbackUrl: 'https://example.com',
+          settlementAmount: 2_000_000_000,
+        },
+      }
+    );
+
+    expect(createPaystackPaymentIntent.__typename).toBe(
+      'PaystackPaymentIntentError'
+    );
+    expect(createPaystackPaymentIntent.message).toBe(
+      'settlementAmount cannot exceed the outstanding balance.'
+    );
+    expect(scope.isDone()).toBe(false);
+    nock.cleanAll();
+  });
+
+  it('rejects a chargeAmount below the settlement amount without calling Paystack', async () => {
+    const scope = nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, mockInitializeTransactionResponse);
+
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    const { createPaystackPaymentIntent } = await shopClient.query(
+      CreatePaystackPaymentIntent,
+      {
+        input: {
+          callbackUrl: 'https://example.com',
+          settlementAmount: 100,
+          chargeAmount: 50,
+        },
+      }
+    );
+
+    expect(createPaystackPaymentIntent.__typename).toBe(
+      'PaystackPaymentIntentError'
+    );
+    expect(createPaystackPaymentIntent.message).toBe(
+      'chargeAmount cannot be less than the settlement amount.'
+    );
+    expect(scope.isDone()).toBe(false);
+    nock.cleanAll();
+  });
+
   it('can gracefully handle a failed transaction initialization', async () => {
     nock(`${PAYSTACK_API_URL}`).post('/transaction/initialize').reply(400, {
       message: 'Invalid request',

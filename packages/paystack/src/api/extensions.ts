@@ -20,11 +20,20 @@ export const shopApiSchemaExtensions: DocumentNode = graphql`
     callbackUrl: String!
 
     """
-    Amount to charge in Paystack (order currency, minor units). When set, this is only
-    sent to Paystack for transaction initialize; it does not change the order
-    totalWithTax in Vendure. Use for e.g. passing card fees to the customer.
+    What Paystack collects, in minor units. Defaults to the settlement amount.
     """
-    paystackAmount: Money
+    chargeAmount: Money
+
+    """
+    What is written to Payment.amount. Defaults to the outstanding balance.
+    Cannot exceed it.
+    """
+    settlementAmount: Money
+
+    """
+    Deprecated. Use chargeAmount.
+    """
+    paystackAmount: Money @deprecated(reason: "Use chargeAmount.")
 
     """
     An array of payment channels to control what channels you want to make available

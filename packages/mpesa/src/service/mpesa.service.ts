@@ -343,6 +343,8 @@ export class MpesaService {
       if (!order) return;
       await this.orderService.updateCustomFields(ctx, order.id, {
         mpesaCheckoutRequestID: null,
+        mpesaChargeAmount: null,
+        mpesaSettlementAmount: null,
       });
       return;
     }

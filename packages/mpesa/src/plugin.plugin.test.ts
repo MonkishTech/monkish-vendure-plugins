@@ -244,6 +244,53 @@ describe('Mpesa Plugin', () => {
     return { id: order.id, code: order.code, totalWithTax: order.totalWithTax };
   }
 
+  async function arrangeAddingItems(
+    client: SimpleGraphQLClient
+  ): Promise<{ id: string; code: string; totalWithTax: number }> {
+    await client.asUserWithCredentials(customer.emailAddress, 'test');
+    const before = await client.query(ActiveOrderForMpesa);
+    if (!before.activeOrder) {
+      await addItem(client, 1, 1);
+    }
+    await client.query(gqlTag`
+      mutation {
+        setOrderShippingAddress(
+          input: {
+            fullName: "Ada Lovelace"
+            streetLine1: "1 Market Street"
+            city: "Nairobi"
+            postalCode: "00100"
+            countryCode: "KE"
+          }
+        ) {
+          ... on Order {
+            id
+          }
+        }
+      }
+    `);
+    const withMethods = await client.query(ActiveOrderForMpesa);
+    const shippingMethodId = withMethods.eligibleShippingMethods[0].id;
+    await client.query(
+      gqlTag`
+        mutation SetShipping($ids: [ID!]!) {
+          setOrderShippingMethod(shippingMethodId: $ids) {
+            ... on Order {
+              id
+            }
+          }
+        }
+      `,
+      { ids: [shippingMethodId] }
+    );
+    const ready = await client.query(ActiveOrderForMpesa);
+    return {
+      id: ready.activeOrder.id,
+      code: ready.activeOrder.code,
+      totalWithTax: ready.activeOrder.totalWithTax,
+    };
+  }
+
   async function cancelActiveOrder(client: SimpleGraphQLClient) {
     await client.query(gqlTag`
       mutation {
@@ -665,6 +712,115 @@ describe('Mpesa Plugin', () => {
     expect(settled.payments).toHaveLength(1);
     expect(settled.payments[0].amount).toBe(settlementAmount);
     expect(settled.state).not.toBe('PaymentSettled');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('creates one payment when the callback is delivered twice', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_once');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    mockStkQuery('ws_CO_once');
+    await postCallback(
+      successCallback('ws_CO_once', chargeAmount / 100, 'RCPONCE')
+    );
+    mockStkQuery('ws_CO_once');
+    const second = await postCallback(
+      successCallback('ws_CO_once', chargeAmount / 100, 'RCPONCE')
+    );
+    expect(second.status).toBe(200);
+    const settled = await adminOrder(order.id);
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].transactionId).toBe('ws_CO_once');
+  });
+
+  it('answers 200 when the callback amount does not match the stored charge', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_mismatch');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const response = await postCallback(
+      successCallback('ws_CO_mismatch', chargeAmount / 100 + 1, 'RCPBAD')
+    );
+    expect(response.status).toBe(200);
+    const settled = await adminOrder(order.id);
+    expect(settled.payments ?? []).toHaveLength(0);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('answers 200 when the outstanding balance grows past the charge', async () => {
+    const order = await arrangeAddingItems(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_grew');
+    await shopClient.query(Initiate, {
+      phoneNumber: '+254700000000',
+      chargeAmount,
+    });
+    await addItem(shopClient, 1, 1);
+    await shopClient.query(gqlTag`
+      mutation {
+        transitionOrderToState(state: "ArrangingPayment") {
+          ... on Order { state }
+        }
+      }
+    `);
+    const response = await postCallback(
+      successCallback('ws_CO_grew', chargeAmount / 100, 'RCPGREW')
+    );
+    expect(response.status).toBe(200);
+    const settled = await adminOrder(order.id);
+    expect(settled.payments ?? []).toHaveLength(0);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('answers 403 when the callback IP is not allowlisted', async () => {
+    const response = await postCallback(
+      successCallback('ws_CO_forbidden', 1, 'RCPFORB'),
+      { 'x-forwarded-for': '203.0.113.5' }
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it('answers 500 when a successful callback matches no order', async () => {
+    const response = await postCallback(
+      successCallback('ws_CO_missing', 1, 'RCPMISS')
+    );
+    expect(response.status).toBe(500);
+  });
+
+  it('answers 200 when a failed callback matches no order', async () => {
+    const response = await postCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: 'ws_CO_unknown_fail',
+          ResultCode: 1,
+          ResultDesc: 'Cancelled',
+        },
+      },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('clears the stored amounts when the STK push fails', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    captureStk('ws_CO_fail');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const response = await postCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: 'ws_CO_fail',
+          ResultCode: 1032,
+          ResultDesc: 'Cancelled by user',
+        },
+      },
+    });
+    expect(response.status).toBe(200);
+    const stored = await readMpesaFields(order.id);
+    expect(stored.mpesaCheckoutRequestID).toBeNull();
+    expect(stored.mpesaChargeAmount).toBeNull();
+    expect(stored.mpesaSettlementAmount).toBeNull();
     await cancelActiveOrder(shopClient);
   });
 });

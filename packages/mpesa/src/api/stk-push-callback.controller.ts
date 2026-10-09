@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  HttpCode,
+  HttpStatus,
   Inject,
   Post,
   Req,
@@ -19,7 +21,7 @@ import {
   STK_PUSH_CALLBACK_ALLOWLIST,
   loggerCtx,
 } from '../constants';
-import { MpesaService } from '../service/mpesa.service';
+import { MpesaService, MpesaSettleRejection } from '../service/mpesa.service';
 import { type STKCallbackPayload } from '../types';
 
 function getClientIp(req: express.Request): string {
@@ -41,6 +43,7 @@ export class StkPushCallbackController {
   ) {}
 
   @Post()
+  @HttpCode(HttpStatus.OK)
   async handleCallback(
     @Req() req: express.Request,
     @Body() payload: STKCallbackPayload
@@ -63,7 +66,15 @@ export class StkPushCallbackController {
     );
 
     const ctx = await this.createRequestContext();
-    await this.mpesaService.handleStkPushCallback(ctx, payload);
+    try {
+      await this.mpesaService.handleStkPushCallback(ctx, payload);
+    } catch (error) {
+      if (error instanceof MpesaSettleRejection) {
+        Logger.error(error.message, loggerCtx);
+        return;
+      }
+      throw error;
+    }
   }
 
   private async createRequestContext(): Promise<RequestContext> {

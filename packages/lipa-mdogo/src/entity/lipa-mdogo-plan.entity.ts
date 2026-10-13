@@ -1,4 +1,5 @@
-import { Channel, DeepPartial, Order, VendureEntity } from '@vendure/core';
+import { Channel, Order, VendureEntity } from '@vendure/core';
+import type { DeepPartial } from '@vendure/core';
 import { Column, Entity, ManyToOne } from 'typeorm';
 
 export type LipaMdogoPlanState = 'Active' | 'Completed' | 'Missed';
@@ -10,23 +11,23 @@ export class LipaMdogoPlan extends VendureEntity {
   }
 
   @ManyToOne(() => Order, { onDelete: 'CASCADE' })
-  order: Order;
+  order!: Order;
 
   @ManyToOne(() => Channel, { onDelete: 'CASCADE' })
-  channel: Channel;
+  channel!: Channel;
 
   @Column()
-  minimumPayment: number;
+  minimumPayment!: number;
 
   @Column({ type: 'datetime' })
-  deadline: Date;
+  deadline!: Date;
 
   @Column('simple-json')
-  reminderDaysBefore: number[];
+  reminderDaysBefore!: number[];
 
   @Column('simple-json')
-  remindersSent: number[];
+  remindersSent!: number[];
 
   @Column({ type: 'varchar' })
-  state: LipaMdogoPlanState;
+  state!: LipaMdogoPlanState;
 }

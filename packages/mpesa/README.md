@@ -1,4 +1,8 @@
+![Vendure M-Pesa Plugin](https://raw.githubusercontent.com/MonkishTech/monkish-vendure-plugins/main/assets/vendure-mpesa-logo.png)
+
 # M-Pesa Vendure Plugin
+
+![NPM Version](https://img.shields.io/npm/v/@monkish/vendure-mpesa-plugin)
 
 The plugin sends an M-Pesa STK push, and the Safaricom callback records a Vendure payment. `verifyMpesaTransaction` reports whether that payment exists. The shilling amount Safaricom collects and the amount stored on the payment are separate.
 

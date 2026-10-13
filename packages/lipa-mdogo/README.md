@@ -1,5 +1,7 @@
 # Lipa mdogo
 
+![NPM Version](https://img.shields.io/npm/v/@monkish/vendure-lipa-mdogo-plugin)
+
 An order can be paid any amount until a deadline, at or above a minimum. The plugin stores that plan on the order and reports what is still owed. The host charges the customer through Paystack or M-Pesa and passes the amount as `settlementAmount`. This plugin does not charge.
 
 ## Installation

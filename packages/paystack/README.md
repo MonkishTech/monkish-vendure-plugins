@@ -2,8 +2,7 @@
 
 # Paystack Vendure Plugin
 
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/MonkishTech/monkish-vendure-plugins/ci.yml)
-&nbsp; ![NPM Version](https://img.shields.io/npm/v/@monkish/vendure-paystack-plugin)
+![NPM Version](https://img.shields.io/npm/v/@monkish/vendure-paystack-plugin)
 
 The plugin initializes a Paystack transaction, verifies it, and records a Vendure payment. `confirmPaystackPayment` and the Paystack webhook settle through the same method. The amount Paystack collects and the amount stored on the Vendure payment are separate.
 

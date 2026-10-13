@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import { RefundStates } from '@vendure/core';
-import { CustomOrderFields } from '@vendure/core/dist/entity/custom-entity-fields';
+import '@vendure/core';
+import '@vendure/core/dist/entity/custom-entity-fields';
 
 declare module '@vendure/core/dist/entity/custom-entity-fields' {
   interface CustomOrderFields {

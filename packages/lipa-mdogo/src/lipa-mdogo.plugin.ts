@@ -8,6 +8,7 @@ import {
 import { LipaMdogoPlan } from './entity/lipa-mdogo-plan.entity';
 import { LipaMdogoService } from './service/lipa-mdogo.service';
 import { lipaMdogoPlansTask } from './service/lipa-mdogo.task';
+import { RefundSettledPaymentsStrategy } from './service/missed-payment.strategy';
 import {
   LipaMdogoMissedPaymentStrategy,
   LipaMdogoPlanStrategy,
@@ -23,7 +24,7 @@ export interface LipaMdogoPluginOptions {
   compatibility: '>=3.4.1',
   imports: [PluginCommonModule],
   entities: [LipaMdogoPlan],
-  providers: [LipaMdogoService],
+  providers: [LipaMdogoService, RefundSettledPaymentsStrategy],
   shopApiExtensions: {
     schema: shopApiExtensions,
     resolvers: [LipaMdogoShopResolver, LipaMdogoOrderResolver],

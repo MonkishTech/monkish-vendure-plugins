@@ -5,6 +5,7 @@ import {
   EventBus,
   LanguageCode,
   Order,
+  OrderService,
   PaymentMethodHandler,
   RequestContext,
   RequestContextService,
@@ -17,7 +18,11 @@ import {
   SqljsInitializer,
 } from '@vendure/testing';
 import { LipaMdogoPlugin } from './lipa-mdogo.plugin';
-import { LipaMdogoPlanCompletedEvent, LipaMdogoReminderEvent } from './events';
+import {
+  LipaMdogoPlanCompletedEvent,
+  LipaMdogoPlanMissedEvent,
+  LipaMdogoReminderEvent,
+} from './events';
 import { lipaMdogoPlansTask } from './service/lipa-mdogo.task';
 import { addItem, getCustomerList, initialData, testConfig } from '~utils';
 
@@ -39,11 +44,16 @@ const testPaymentHandler = new PaymentMethodHandler({
     metadata: {},
   }),
   settlePayment: async () => ({ success: true }),
-  createRefund: async () => ({
-    state: 'Settled' as const,
-    transactionId: 'refund-1',
-    metadata: {},
-  }),
+  createRefund: async () => {
+    if (refundControl.fail) {
+      throw new Error('refund failed');
+    }
+    return {
+      state: 'Settled' as const,
+      transactionId: 'refund-1',
+      metadata: {},
+    };
+  },
 });
 
 const Start = gqlTag`
@@ -478,6 +488,157 @@ describe('Lipa mdogo plugin', () => {
     );
     expect(loaded.order.lipaMdogoPlan.state).toBe('Completed');
     expect(events).toHaveLength(1);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('refunds settled payments and cancels the order when the deadline has passed', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-10-20T15:00:00.000Z',
+      },
+    });
+    paymentControl.deduct = order.totalWithTax - 100;
+    await shopClient.query(
+      gqlTag`
+        mutation Pay($input: PaymentInput!) {
+          addPaymentToOrder(input: $input) {
+            ... on Order { id }
+            ... on ErrorResult { errorCode message }
+          }
+        }
+      `,
+      { input: { method: 'test-payment', metadata: {} } }
+    );
+    const events: LipaMdogoPlanMissedEvent[] = [];
+    const sub = server.app
+      .get(EventBus)
+      .ofType(LipaMdogoPlanMissedEvent)
+      .subscribe((event) => events.push(event));
+    clock.now = new Date('2026-10-20T15:00:00.000Z');
+    await lipaMdogoPlansTask.execute(server.app);
+    sub.unsubscribe();
+    const loaded = await adminClient.query(
+      gqlTag`
+        query Missed($id: ID!) {
+          order(id: $id) {
+            state
+            lipaMdogoPlan { state }
+            payments { amount refunds { state total } }
+          }
+        }
+      `,
+      { id: order.id }
+    );
+    expect(loaded.order.state).toBe('Cancelled');
+    expect(loaded.order.lipaMdogoPlan.state).toBe('Missed');
+    expect(loaded.order.payments[0].refunds[0].state).toBe('Settled');
+    expect(loaded.order.payments[0].refunds[0].total).toBe(100);
+    expect(events).toHaveLength(1);
+  });
+
+  it('leaves the plan active when the refund fails, then finishes on the next run', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-10-20T15:00:00.000Z',
+      },
+    });
+    paymentControl.deduct = order.totalWithTax - 100;
+    await shopClient.query(
+      gqlTag`
+        mutation Pay($input: PaymentInput!) {
+          addPaymentToOrder(input: $input) {
+            ... on Order { id }
+            ... on ErrorResult { errorCode message }
+          }
+        }
+      `,
+      { input: { method: 'test-payment', metadata: {} } }
+    );
+    refundControl.fail = true;
+    clock.now = new Date('2026-10-20T15:00:00.000Z');
+    await lipaMdogoPlansTask.execute(server.app);
+    const midway = await adminClient.query(
+      gqlTag`
+        query Mid($id: ID!) {
+          order(id: $id) { state lipaMdogoPlan { state } }
+        }
+      `,
+      { id: order.id }
+    );
+    expect(midway.order.state).toBe('ArrangingPayment');
+    expect(midway.order.lipaMdogoPlan.state).toBe('Active');
+    refundControl.fail = false;
+    await lipaMdogoPlansTask.execute(server.app);
+    const done = await adminClient.query(
+      gqlTag`
+        query Done($id: ID!) {
+          order(id: $id) { state lipaMdogoPlan { state } }
+        }
+      `,
+      { id: order.id }
+    );
+    expect(done.order.state).toBe('Cancelled');
+    expect(done.order.lipaMdogoPlan.state).toBe('Missed');
+  });
+
+  it('marks a cancelled order missed without a missed event', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-11-12T15:00:00.000Z',
+      },
+    });
+    await cancelActiveOrder(shopClient);
+    const events: LipaMdogoPlanMissedEvent[] = [];
+    const sub = server.app
+      .get(EventBus)
+      .ofType(LipaMdogoPlanMissedEvent)
+      .subscribe((event) => events.push(event));
+    await lipaMdogoPlansTask.execute(server.app);
+    sub.unsubscribe();
+    expect(events).toHaveLength(0);
+    const loaded = await adminClient.query(
+      gqlTag`
+        query CancelledPlan($id: ID!) {
+          order(id: $id) { lipaMdogoPlan { state } }
+        }
+      `,
+      { id: order.id }
+    );
+    expect(loaded.order.lipaMdogoPlan.state).toBe('Missed');
+  });
+
+  it('leaves the plan active when the order cannot be loaded', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-10-20T15:00:00.000Z',
+      },
+    });
+    const orderService = server.app.get(OrderService);
+    const findOne = orderService.findOne.bind(orderService);
+    orderService.findOne = async () => undefined;
+    clock.now = new Date('2026-10-20T15:00:00.000Z');
+    try {
+      await lipaMdogoPlansTask.execute(server.app);
+    } finally {
+      orderService.findOne = findOne;
+    }
+    const loaded = await adminClient.query(
+      gqlTag`
+        query StillActive($id: ID!) {
+          order(id: $id) { lipaMdogoPlan { state } }
+        }
+      `,
+      { id: order.id }
+    );
+    expect(loaded.order.lipaMdogoPlan.state).toBe('Active');
     await cancelActiveOrder(shopClient);
   });
 });

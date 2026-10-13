@@ -13,9 +13,14 @@ import {
 } from '@vendure/core';
 
 import { LipaMdogoPlan } from '../entity/lipa-mdogo-plan.entity';
-import { LipaMdogoPlanCompletedEvent, LipaMdogoReminderEvent } from '../events';
+import {
+  LipaMdogoPlanCompletedEvent,
+  LipaMdogoPlanMissedEvent,
+  LipaMdogoReminderEvent,
+} from '../events';
 import { LipaMdogoPlugin } from '../lipa-mdogo.plugin';
 import { isReminderDue, outstandingBalance } from './amounts';
+import { RefundSettledPaymentsStrategy } from './missed-payment.strategy';
 import { anyAmountUntilDeadline } from './strategies';
 
 const DEFAULT_REMINDER_DAYS = [7, 1, 0];
@@ -41,7 +46,8 @@ export class LipaMdogoService {
     private orderService: OrderService,
     private connection: TransactionalConnection,
     private requestContextService: RequestContextService,
-    private eventBus: EventBus
+    private eventBus: EventBus,
+    private refundSettledPayments: RefundSettledPaymentsStrategy
   ) {}
 
   async startPlan(
@@ -140,17 +146,18 @@ export class LipaMdogoService {
       relations: { order: { payments: true }, channel: true },
     });
     for (const plan of plans) {
-      await this.publishDueReminders(plan);
+      await this.runPlan(plan);
     }
   }
 
-  private async publishDueReminders(plan: LipaMdogoPlan): Promise<void> {
+  private async runPlan(plan: LipaMdogoPlan): Promise<void> {
     const ctx = await this.requestContextService.create({
       apiType: 'admin',
-      channelOrToken: plan.channel,
+      channelOrToken: plan.channel.token,
     });
     const order = await this.orderService.findOne(ctx, plan.order.id, [
       'payments',
+      'payments.refunds',
     ]);
     if (!order) {
       Logger.warn(`Lipa mdogo order ${plan.order.id} could not be loaded.`);
@@ -167,7 +174,28 @@ export class LipaMdogoService {
       );
       return;
     }
-    if (order.state === 'Cancelled' || now >= deadline) {
+    if (order.state === 'Cancelled') {
+      plan.state = 'Missed';
+      await this.connection.getRepository(ctx, LipaMdogoPlan).save(plan);
+      return;
+    }
+    if (now.getTime() >= deadline.getTime()) {
+      const strategy =
+        LipaMdogoPlugin.options.missedPaymentStrategy ??
+        this.refundSettledPayments;
+      try {
+        await strategy.handle(ctx, order);
+      } catch (error) {
+        Logger.error(
+          error instanceof Error ? error.message : 'Lipa mdogo refund failed.'
+        );
+        return;
+      }
+      plan.state = 'Missed';
+      await this.connection.getRepository(ctx, LipaMdogoPlan).save(plan);
+      await this.eventBus.publish(
+        new LipaMdogoPlanMissedEvent(ctx, order, plan)
+      );
       return;
     }
     const sent = [...plan.remindersSent];

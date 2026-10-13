@@ -22,6 +22,7 @@ module.exports = [
             'gql.tada',
             'nock',
             'vite-tsconfig-paths',
+            'typeorm',
             'unplugin-swc',
             'vitest',
           ],

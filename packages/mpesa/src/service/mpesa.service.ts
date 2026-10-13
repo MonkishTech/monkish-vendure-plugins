@@ -768,7 +768,13 @@ export class MpesaService {
       );
     }
 
-    const folded = base64Only.match(/.{1,64}/g)!.join('\n');
+    const chunks = base64Only.match(/.{1,64}/g);
+    if (!chunks) {
+      throw new Error(
+        'Input does not look like a valid base64 certificate payload.'
+      );
+    }
+    const folded = chunks.join('\n');
 
     return `-----BEGIN CERTIFICATE-----\n${folded}\n-----END CERTIFICATE-----\n`;
   }

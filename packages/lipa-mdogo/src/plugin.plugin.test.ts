@@ -7,7 +7,6 @@ import {
   Order,
   OrderService,
   PaymentMethodHandler,
-  RequestContext,
   RequestContextService,
   TransactionalConnection,
 } from '@vendure/core';

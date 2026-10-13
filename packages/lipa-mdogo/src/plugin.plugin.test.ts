@@ -29,8 +29,8 @@ const testPaymentHandler = new PaymentMethodHandler({
   code: 'test-payment',
   description: [{ languageCode: LanguageCode.en, value: 'Test payment' }],
   args: {},
-  createPayment: async () => ({
-    amount: 0,
+  createPayment: async (_ctx, _order, amount) => ({
+    amount: amount - paymentControl.deduct,
     state: 'Settled' as const,
     transactionId: 'pay-1',
     metadata: {},
@@ -332,6 +332,36 @@ describe('Lipa mdogo plugin', () => {
     await shopClient.query(Start, { input });
     await expect(shopClient.query(Start, { input })).rejects.toThrow(
       'This order already has a lipa mdogo plan.'
+    );
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('reports the outstanding balance when it is below the minimum', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const minimumPayment = order.totalWithTax - 100;
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment,
+        deadline: '2026-11-12T15:00:00.000Z',
+      },
+    });
+    paymentControl.deduct = 50;
+    await shopClient.query(
+      gqlTag`
+        mutation Pay($input: PaymentInput!) {
+          addPaymentToOrder(input: $input) {
+            ... on Order { id }
+            ... on ErrorResult { errorCode message }
+          }
+        }
+      `,
+      { input: { method: 'test-payment', metadata: {} } }
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder.lipaMdogoPlan.outstanding).toBe(50);
+    expect(loaded.activeOrder.lipaMdogoPlan.minimumDue).toBe(50);
+    expect(loaded.activeOrder.lipaMdogoPlan.minimumPayment).toBe(
+      minimumPayment
     );
     await cancelActiveOrder(shopClient);
   });

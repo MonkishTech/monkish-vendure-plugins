@@ -1,15 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import {
   ActiveOrderService,
+  EventBus,
   ID,
+  Logger,
   Order,
   OrderService,
   RequestContext,
+  RequestContextService,
   TransactionalConnection,
   UserInputError,
 } from '@vendure/core';
 
 import { LipaMdogoPlan } from '../entity/lipa-mdogo-plan.entity';
+import { LipaMdogoReminderEvent } from '../events';
 import { LipaMdogoPlugin } from '../lipa-mdogo.plugin';
 import { isReminderDue, outstandingBalance } from './amounts';
 import { anyAmountUntilDeadline } from './strategies';
@@ -35,7 +39,9 @@ export class LipaMdogoService {
   constructor(
     private activeOrderService: ActiveOrderService,
     private orderService: OrderService,
-    private connection: TransactionalConnection
+    private connection: TransactionalConnection,
+    private requestContextService: RequestContextService,
+    private eventBus: EventBus
   ) {}
 
   async startPlan(
@@ -128,7 +134,49 @@ export class LipaMdogoService {
   }
 
   async runDuePlans(): Promise<void> {
-    return;
+    const ctx = await this.requestContextService.create({ apiType: 'admin' });
+    const plans = await this.connection.getRepository(ctx, LipaMdogoPlan).find({
+      where: { state: 'Active' },
+      relations: { order: { payments: true }, channel: true },
+    });
+    for (const plan of plans) {
+      await this.publishDueReminders(plan);
+    }
+  }
+
+  private async publishDueReminders(plan: LipaMdogoPlan): Promise<void> {
+    const ctx = await this.requestContextService.create({
+      apiType: 'admin',
+      channelOrToken: plan.channel,
+    });
+    const order = await this.orderService.findOne(ctx, plan.order.id, [
+      'payments',
+    ]);
+    if (!order) {
+      Logger.warn(`Lipa mdogo order ${plan.order.id} could not be loaded.`);
+      return;
+    }
+    const outstanding = outstandingBalance(order);
+    const now = this.clock();
+    const deadline = new Date(plan.deadline);
+    if (outstanding <= 0 || order.state === 'Cancelled') {
+      return;
+    }
+    if (now >= deadline) {
+      return;
+    }
+    const sent = [...plan.remindersSent];
+    for (const offset of plan.reminderDaysBefore) {
+      if (sent.includes(offset) || !isReminderDue(now, deadline, offset)) {
+        continue;
+      }
+      await this.eventBus.publish(
+        new LipaMdogoReminderEvent(ctx, order, plan, offset, outstanding)
+      );
+      sent.push(offset);
+      plan.remindersSent = sent;
+      await this.connection.getRepository(ctx, LipaMdogoPlan).save(plan);
+    }
   }
 
   private clock(): Date {

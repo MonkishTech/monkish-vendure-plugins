@@ -2,6 +2,7 @@ import path from 'path';
 import { rm } from 'node:fs/promises';
 import gqlTag from 'graphql-tag';
 import {
+  EventBus,
   LanguageCode,
   Order,
   PaymentMethodHandler,
@@ -16,6 +17,8 @@ import {
   SqljsInitializer,
 } from '@vendure/testing';
 import { LipaMdogoPlugin } from './lipa-mdogo.plugin';
+import { LipaMdogoReminderEvent } from './events';
+import { lipaMdogoPlansTask } from './service/lipa-mdogo.task';
 import { addItem, getCustomerList, initialData, testConfig } from '~utils';
 
 const API_PORT = 3060;
@@ -363,6 +366,69 @@ describe('Lipa mdogo plugin', () => {
     expect(loaded.activeOrder.lipaMdogoPlan.minimumPayment).toBe(
       minimumPayment
     );
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('publishes the seven-day reminder once', async () => {
+    await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-11-12T15:00:00.000Z',
+      },
+    });
+    const events: LipaMdogoReminderEvent[] = [];
+    const sub = server.app
+      .get(EventBus)
+      .ofType(LipaMdogoReminderEvent)
+      .subscribe((event) => events.push(event));
+    clock.now = new Date('2026-11-05T00:00:00.000Z');
+    await lipaMdogoPlansTask.execute(server.app);
+    await lipaMdogoPlansTask.execute(server.app);
+    sub.unsubscribe();
+    expect(events).toHaveLength(1);
+    expect(events[0].daysBefore).toBe(7);
+    expect(events[0].outstanding).toBeGreaterThan(0);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('does not publish an offset that was already due when the plan started', async () => {
+    await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-10-15T15:00:00.000Z',
+      },
+    });
+    const events: LipaMdogoReminderEvent[] = [];
+    const sub = server.app
+      .get(EventBus)
+      .ofType(LipaMdogoReminderEvent)
+      .subscribe((event) => events.push(event));
+    await lipaMdogoPlansTask.execute(server.app);
+    sub.unsubscribe();
+    expect(events).toHaveLength(0);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('publishes nothing when the start call passes an empty reminder list', async () => {
+    await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-11-12T15:00:00.000Z',
+        reminderDaysBefore: [],
+      },
+    });
+    const events: LipaMdogoReminderEvent[] = [];
+    const sub = server.app
+      .get(EventBus)
+      .ofType(LipaMdogoReminderEvent)
+      .subscribe((event) => events.push(event));
+    clock.now = new Date('2026-11-12T14:00:00.000Z');
+    await lipaMdogoPlansTask.execute(server.app);
+    sub.unsubscribe();
+    expect(events).toHaveLength(0);
     await cancelActiveOrder(shopClient);
   });
 });

@@ -31,3 +31,23 @@ export const shopApiExtensions = gql`
     lipaMdogoPlan: LipaMdogoPlan
   }
 `;
+
+export const adminApiExtensions = gql`
+  enum LipaMdogoPlanState {
+    Active
+    Completed
+    Missed
+  }
+
+  type LipaMdogoPlan {
+    minimumPayment: Money!
+    deadline: DateTime!
+    outstanding: Money!
+    minimumDue: Money!
+    state: LipaMdogoPlanState!
+  }
+
+  extend type Order {
+    lipaMdogoPlan: LipaMdogoPlan
+  }
+`;

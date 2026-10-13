@@ -13,7 +13,7 @@ import {
 } from '@vendure/core';
 
 import { LipaMdogoPlan } from '../entity/lipa-mdogo-plan.entity';
-import { LipaMdogoReminderEvent } from '../events';
+import { LipaMdogoPlanCompletedEvent, LipaMdogoReminderEvent } from '../events';
 import { LipaMdogoPlugin } from '../lipa-mdogo.plugin';
 import { isReminderDue, outstandingBalance } from './amounts';
 import { anyAmountUntilDeadline } from './strategies';
@@ -159,10 +159,15 @@ export class LipaMdogoService {
     const outstanding = outstandingBalance(order);
     const now = this.clock();
     const deadline = new Date(plan.deadline);
-    if (outstanding <= 0 || order.state === 'Cancelled') {
+    if (outstanding <= 0) {
+      plan.state = 'Completed';
+      await this.connection.getRepository(ctx, LipaMdogoPlan).save(plan);
+      await this.eventBus.publish(
+        new LipaMdogoPlanCompletedEvent(ctx, order, plan)
+      );
       return;
     }
-    if (now >= deadline) {
+    if (order.state === 'Cancelled' || now >= deadline) {
       return;
     }
     const sent = [...plan.remindersSent];

@@ -17,7 +17,7 @@ import {
   SqljsInitializer,
 } from '@vendure/testing';
 import { LipaMdogoPlugin } from './lipa-mdogo.plugin';
-import { LipaMdogoReminderEvent } from './events';
+import { LipaMdogoPlanCompletedEvent, LipaMdogoReminderEvent } from './events';
 import { lipaMdogoPlansTask } from './service/lipa-mdogo.task';
 import { addItem, getCustomerList, initialData, testConfig } from '~utils';
 
@@ -429,6 +429,55 @@ describe('Lipa mdogo plugin', () => {
     await lipaMdogoPlansTask.execute(server.app);
     sub.unsubscribe();
     expect(events).toHaveLength(0);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('completes the plan when settled payments cover the order', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, {
+      input: {
+        minimumPayment: 100,
+        deadline: '2026-10-14T15:00:00.000Z',
+      },
+    });
+    await adminClient.query(
+      gqlTag`
+        mutation Pay($input: ManualPaymentInput!) {
+          addManualPaymentToOrder(input: $input) {
+            ... on Order { state }
+            ... on ErrorResult { message }
+          }
+        }
+      `,
+      {
+        input: {
+          orderId: order.id,
+          method: 'test-payment',
+          transactionId: 'pay-full',
+          metadata: {},
+        },
+      }
+    );
+    const events: LipaMdogoPlanCompletedEvent[] = [];
+    const sub = server.app
+      .get(EventBus)
+      .ofType(LipaMdogoPlanCompletedEvent)
+      .subscribe((event) => events.push(event));
+    clock.now = new Date('2026-10-20T15:00:00.000Z');
+    await lipaMdogoPlansTask.execute(server.app);
+    sub.unsubscribe();
+    const loaded = await adminClient.query(
+      gqlTag`
+        query OrderPlan($id: ID!) {
+          order(id: $id) {
+            lipaMdogoPlan { state }
+          }
+        }
+      `,
+      { id: order.id }
+    );
+    expect(loaded.order.lipaMdogoPlan.state).toBe('Completed');
+    expect(events).toHaveLength(1);
     await cancelActiveOrder(shopClient);
   });
 });

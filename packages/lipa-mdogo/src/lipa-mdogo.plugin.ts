@@ -1,6 +1,6 @@
 import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 
-import { shopApiExtensions } from './api/api-extensions';
+import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
 import {
   LipaMdogoOrderResolver,
   LipaMdogoShopResolver,
@@ -27,6 +27,10 @@ export interface LipaMdogoPluginOptions {
   shopApiExtensions: {
     schema: shopApiExtensions,
     resolvers: [LipaMdogoShopResolver, LipaMdogoOrderResolver],
+  },
+  adminApiExtensions: {
+    schema: adminApiExtensions,
+    resolvers: [LipaMdogoOrderResolver],
   },
   configuration: (config) => {
     config.schedulerOptions.tasks.push(lipaMdogoPlansTask);

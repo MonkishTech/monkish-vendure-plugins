@@ -23,7 +23,7 @@ import {
   TransactionalConnection,
   UserInputError,
 } from '@vendure/core';
-import axios, { AxiosError, AxiosInstance } from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { paystackPaymentMethodHandler } from '../config/paystack.handler';
 import {
   CHARGE_AMOUNT_METADATA_KEY,
@@ -44,6 +44,7 @@ import {
   TransactionEvent,
   VerificationResponse,
 } from '../types';
+import { buildLogMessage, logProviderError } from './log-provider-error';
 
 export class PaystackSettleRejection extends Error {
   constructor(message: string) {
@@ -173,6 +174,10 @@ export class PaystackService {
     const methods = await this.listPaystackPaymentMethods(ctx);
 
     if (methods.length === 0) {
+      Logger.warn(
+        buildLogMessage('No Paystack payment method is configured'),
+        loggerCtx
+      );
       throw new UserInputError(
         'No Paystack payment method is configured for this channel.'
       );
@@ -180,14 +185,18 @@ export class PaystackService {
 
     if (methods.length > 1) {
       Logger.warn(
-        'Multiple Paystack payment methods detected; using the first configured method.',
+        buildLogMessage('Multiple Paystack payment methods detected', {
+          count: methods.length,
+        }),
         loggerCtx
       );
     }
 
     const only = methods[0];
     if (!only) {
-      throw new InternalServerError(`[${loggerCtx}] No Paystack payment method`);
+      throw new InternalServerError(
+        `[${loggerCtx}] No Paystack payment method`
+      );
     }
     return only;
   }
@@ -212,11 +221,7 @@ export class PaystackService {
       throw new UserInputError('No order found for active session');
     }
 
-    const {
-      channels,
-      callbackUrl,
-      metadata,
-    } = input;
+    const { channels, callbackUrl, metadata } = input;
     const { customer, currencyCode, code } = order;
 
     if (!customer) {
@@ -233,6 +238,12 @@ export class PaystackService {
     const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
     const secretKey = secretKeyFromHandler(paymentMethod.handler);
     if (!secretKey) {
+      Logger.error(
+        buildLogMessage('Paystack secret key is not configured', {
+          paymentMethod: paymentMethod.code,
+        }),
+        loggerCtx
+      );
       throw new InternalServerError(
         `[${loggerCtx}] Paystack payment method "${paymentMethod.code}" has no secret key configured.`
       );
@@ -274,15 +285,22 @@ export class PaystackService {
       );
 
       if (status !== 200) {
+        Logger.error(
+          buildLogMessage('Paystack initialize failed', {
+            orderCode: code,
+            httpStatus: status,
+            body: typeof data === 'string' ? data : JSON.stringify(data),
+          }),
+          loggerCtx
+        );
         return new PaymentIntentError(data.message);
       }
 
       return data;
     } catch (error) {
-      Logger.error(
-        JSON.stringify((error as AxiosError).toJSON(), null, 2),
-        loggerCtx
-      );
+      logProviderError('Paystack initialize failed', error, {
+        orderCode: code,
+      });
       return new PaymentIntentError(
         "Couldn't initialize transaction. Please try again"
       );
@@ -309,6 +327,14 @@ export class PaystackService {
         `/transaction/verify/${transactionReference}`
       );
       if (status !== 200 || data.status !== 'success') {
+        Logger.warn(
+          buildLogMessage('Paystack charge was not successful', {
+            reference: transactionReference,
+            httpStatus: status,
+            status: data?.status,
+          }),
+          loggerCtx
+        );
         return undefined;
       }
       return {
@@ -320,14 +346,9 @@ export class PaystackService {
             : null,
       };
     } catch (error) {
-      Logger.error(
-        `Could not verify transaction with reference: ${transactionReference}`,
-        loggerCtx
-      );
-      Logger.error(
-        JSON.stringify((error as AxiosError).toJSON(), null, 2),
-        loggerCtx
-      );
+      logProviderError('Paystack verify failed', error, {
+        reference: transactionReference,
+      });
       return undefined;
     }
   }
@@ -341,7 +362,11 @@ export class PaystackService {
     const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
     if (payment.method !== paymentMethod.code) {
       Logger.error(
-        `[${loggerCtx}] Refund failed: payment method ${payment.method} does not match configured Paystack method ${paymentMethod.code}`,
+        buildLogMessage('Paystack refund failed', {
+          orderCode: order.code,
+          paymentMethod: payment.method,
+          configuredMethod: paymentMethod.code,
+        }),
         loggerCtx
       );
       return {
@@ -352,7 +377,10 @@ export class PaystackService {
     const secretKey = secretKeyFromHandler(paymentMethod.handler);
     if (!secretKey) {
       Logger.error(
-        `[${loggerCtx}] Refund failed: no secret key on payment method ${paymentMethod.code}`,
+        buildLogMessage('Paystack secret key is not configured', {
+          orderCode: order.code,
+          paymentMethod: paymentMethod.code,
+        }),
         loggerCtx
       );
       return {
@@ -377,7 +405,11 @@ export class PaystackService {
 
       if (status !== 200) {
         Logger.error(
-          `Could not refund transaction with ID ${payment.metadata.public.transactionId} for order ${order.code}`,
+          buildLogMessage('Paystack refund failed', {
+            orderCode: order.code,
+            httpStatus: status,
+            body: typeof data === 'string' ? data : JSON.stringify(data),
+          }),
           loggerCtx
         );
 
@@ -397,14 +429,9 @@ export class PaystackService {
         },
       };
     } catch (error) {
-      Logger.error(
-        `Could not refund transaction with reference: ${order.code}`,
-        loggerCtx
-      );
-      Logger.error(
-        JSON.stringify((error as AxiosError).toJSON(), null, 2),
-        loggerCtx
-      );
+      logProviderError('Paystack refund failed', error, {
+        orderCode: order.code,
+      });
 
       return {
         state: 'Failed' as const,
@@ -442,6 +469,12 @@ export class PaystackService {
     const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
     const secretKey = secretKeyFromHandler(paymentMethod.handler);
     if (!secretKey) {
+      Logger.error(
+        buildLogMessage('Paystack secret key is not configured', {
+          paymentMethod: paymentMethod.code,
+        }),
+        loggerCtx
+      );
       throw new InternalServerError(
         `[${loggerCtx}] Paystack payment method "${paymentMethod.code}" has no secret key configured.`
       );
@@ -480,6 +513,7 @@ export class PaystackService {
       );
     } catch (error) {
       if (error instanceof PaystackSettleRejection) {
+        Logger.error(buildLogMessage(error.message), loggerCtx, error.stack);
         throw new UserInputError(error.message);
       }
       throw error;
@@ -564,6 +598,13 @@ export class PaystackService {
       if (!(added instanceof Order)) {
         throw new PaystackSettleRejection(added.message);
       }
+      Logger.info(
+        buildLogMessage('Paystack payment settled', {
+          orderCode,
+          id: verified.id,
+        }),
+        loggerCtx
+      );
       return added;
     }
     if (explicitSettlement > outstanding) {
@@ -585,6 +626,13 @@ export class PaystackService {
     if (!settled) {
       throw new Error(`Paystack order ${orderCode} could not be loaded.`);
     }
+    Logger.info(
+      buildLogMessage('Paystack payment settled', {
+        orderCode,
+        id: verified.id,
+      }),
+      loggerCtx
+    );
     return settled;
   }
 
@@ -598,14 +646,26 @@ export class PaystackService {
         ctx,
         transaction_reference
       );
-      if (!order) return;
+      if (!order) {
+        Logger.warn(
+          buildLogMessage('Paystack refund order not found', {
+            transactionReference: transaction_reference,
+          }),
+          loggerCtx
+        );
+        return;
+      }
 
       const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
-      const payment = order.payments.find((p) => p.method === paymentMethod.code);
+      const payment = order.payments.find(
+        (p) => p.method === paymentMethod.code
+      );
 
       if (!payment) {
-        Logger.error(
-          `No Paystack payment found for order ${order.code}`,
+        Logger.warn(
+          buildLogMessage('No Paystack payment found', {
+            orderCode: order.code,
+          }),
           loggerCtx
         );
         return;
@@ -615,8 +675,11 @@ export class PaystackService {
         (refund) => refund.metadata.public.reference === refund_reference
       );
       if (!pendingRefund) {
-        Logger.error(
-          `No pending refund found for order ${order.code} with reference ${refund_reference}`,
+        Logger.warn(
+          buildLogMessage('No pending Paystack refund found', {
+            orderCode: order.code,
+            refundReference: refund_reference,
+          }),
           loggerCtx
         );
         return;
@@ -629,6 +692,13 @@ export class PaystackService {
             pendingRefund.id,
             'Settled'
           );
+          Logger.info(
+            buildLogMessage('Paystack refund settled', {
+              orderCode: order.code,
+              refundReference: refund_reference,
+            }),
+            loggerCtx
+          );
           break;
         case 'refund.failed':
           this.orderService.transitionRefundToState(
@@ -636,12 +706,29 @@ export class PaystackService {
             pendingRefund.id,
             'Failed'
           );
+          Logger.error(
+            buildLogMessage('Paystack refund failed', {
+              orderCode: order.code,
+              refundReference: refund_reference,
+            }),
+            loggerCtx
+          );
+          break;
+        case 'refund.pending':
+          Logger.debug(
+            buildLogMessage('Paystack refund pending', {
+              orderCode: order.code,
+              refundReference: refund_reference,
+            }),
+            loggerCtx
+          );
           break;
         default:
-          Logger.warn(`Unhandled webhook event type ${event}`, loggerCtx);
+          Logger.warn(
+            buildLogMessage('Unhandled Paystack webhook event', { event }),
+            loggerCtx
+          );
       }
-
-      Logger.info(`Refund for order ${order.code} processed`, loggerCtx);
     });
   }
 

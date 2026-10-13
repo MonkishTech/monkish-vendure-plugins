@@ -11,7 +11,11 @@ import { Logger } from '@vendure/core';
 import { createHmac } from 'crypto';
 import type { Request, Response } from 'express';
 import { loggerCtx } from '../constants';
-import { PaystackService, PaystackSettleRejection } from '../service/paystack.service';
+import {
+  PaystackService,
+  PaystackSettleRejection,
+} from '../service/paystack.service';
+import { buildLogMessage } from '../service/log-provider-error';
 import type { RefundEvent, TransactionEvent, WebhookEvent } from '../types';
 
 function paystackBodyString(req: Request, payload: unknown): string {
@@ -35,7 +39,12 @@ export class PaystackController {
   ) {
     if (!signature) {
       const missingHeaderErrorMessage = 'Missing x-paystack-signature header';
-      Logger.error(missingHeaderErrorMessage, loggerCtx);
+      Logger.warn(
+        buildLogMessage('Paystack webhook rejected', {
+          reason: 'missing signature',
+        }),
+        loggerCtx
+      );
       response.status(HttpStatus.BAD_REQUEST).send(missingHeaderErrorMessage);
       return;
     }
@@ -44,7 +53,10 @@ export class PaystackController {
     const secret = await this.paystackService.getPaystackWebhookSecretKey();
     if (!secret) {
       const msg = 'No Paystack payment methods with a secret key configured';
-      Logger.error(msg, loggerCtx);
+      Logger.error(
+        buildLogMessage('Paystack webhook secret is not configured'),
+        loggerCtx
+      );
       response.status(HttpStatus.BAD_REQUEST).send(msg);
       return;
     }
@@ -53,7 +65,12 @@ export class PaystackController {
 
     if (hash !== signature) {
       const errorMessage = 'Invalid signature';
-      Logger.error(errorMessage, loggerCtx);
+      Logger.warn(
+        buildLogMessage('Paystack webhook rejected', {
+          reason: 'invalid signature',
+        }),
+        loggerCtx
+      );
       response.status(HttpStatus.BAD_REQUEST).send(errorMessage);
       return;
     }
@@ -72,18 +89,36 @@ export class PaystackController {
           await this.paystackService.handleRefundEvent(payload as RefundEvent);
           break;
         default:
-          Logger.warn(`Unhandled event type ${payload.event}`, loggerCtx);
+          Logger.warn(
+            buildLogMessage('Unhandled Paystack webhook event', {
+              event: payload.event,
+            }),
+            loggerCtx
+          );
       }
       response.status(HttpStatus.OK).send('Ok');
     } catch (error) {
       if (error instanceof PaystackSettleRejection) {
-        Logger.error(error.message, loggerCtx);
+        if (error.message !== 'Paystack payment was not successful') {
+          const reference =
+            payload.event === 'charge.success'
+              ? (payload as TransactionEvent).data.reference
+              : undefined;
+          Logger.error(
+            buildLogMessage(error.message, { reference }),
+            loggerCtx,
+            error.stack
+          );
+        }
         response.status(HttpStatus.OK).send('Ok');
         return;
       }
       Logger.error(
-        error instanceof Error ? error.message : 'Paystack webhook failed',
-        loggerCtx
+        buildLogMessage(
+          error instanceof Error ? error.message : 'Paystack webhook failed'
+        ),
+        loggerCtx,
+        error instanceof Error ? error.stack : undefined
       );
       response.status(HttpStatus.INTERNAL_SERVER_ERROR).send('Error');
     }

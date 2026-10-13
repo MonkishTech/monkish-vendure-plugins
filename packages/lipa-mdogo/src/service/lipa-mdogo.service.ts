@@ -13,6 +13,7 @@ import {
 } from '@vendure/core';
 
 import { LipaMdogoPlan } from '../entity/lipa-mdogo-plan.entity';
+import { loggerCtx } from '../constants';
 import {
   LipaMdogoPlanCompletedEvent,
   LipaMdogoPlanMissedEvent,
@@ -160,7 +161,10 @@ export class LipaMdogoService {
       'payments.refunds',
     ]);
     if (!order) {
-      Logger.warn(`Lipa mdogo order ${plan.order.id} could not be loaded.`);
+      Logger.warn(
+        `Lipa mdogo order could not be loaded: planId=${plan.id} orderId=${plan.order.id}`,
+        loggerCtx
+      );
       return;
     }
     const outstanding = outstandingBalance(order);
@@ -169,6 +173,10 @@ export class LipaMdogoService {
     if (outstanding <= 0) {
       plan.state = 'Completed';
       await this.connection.getRepository(ctx, LipaMdogoPlan).save(plan);
+      Logger.info(
+        `Lipa mdogo plan completed: orderCode=${order.code} planId=${plan.id}`,
+        loggerCtx
+      );
       await this.eventBus.publish(
         new LipaMdogoPlanCompletedEvent(ctx, order, plan)
       );
@@ -177,6 +185,10 @@ export class LipaMdogoService {
     if (order.state === 'Cancelled') {
       plan.state = 'Missed';
       await this.connection.getRepository(ctx, LipaMdogoPlan).save(plan);
+      Logger.info(
+        `Lipa mdogo plan missed because the order is cancelled: orderCode=${order.code} planId=${plan.id}`,
+        loggerCtx
+      );
       return;
     }
     if (now.getTime() >= deadline.getTime()) {
@@ -187,12 +199,20 @@ export class LipaMdogoService {
         await strategy.handle(ctx, order);
       } catch (error) {
         Logger.error(
-          error instanceof Error ? error.message : 'Lipa mdogo refund failed.'
+          `Lipa mdogo refund failed: orderCode=${order.code} planId=${
+            plan.id
+          } error=${error instanceof Error ? error.message : String(error)}`,
+          loggerCtx,
+          error instanceof Error ? error.stack : undefined
         );
         return;
       }
       plan.state = 'Missed';
       await this.connection.getRepository(ctx, LipaMdogoPlan).save(plan);
+      Logger.info(
+        `Lipa mdogo plan missed: orderCode=${order.code} planId=${plan.id}`,
+        loggerCtx
+      );
       await this.eventBus.publish(
         new LipaMdogoPlanMissedEvent(ctx, order, plan)
       );
@@ -205,6 +225,10 @@ export class LipaMdogoService {
       }
       await this.eventBus.publish(
         new LipaMdogoReminderEvent(ctx, order, plan, offset, outstanding)
+      );
+      Logger.info(
+        `Lipa mdogo reminder sent: orderCode=${order.code} planId=${plan.id} offsetDays=${offset}`,
+        loggerCtx
       );
       sent.push(offset);
       plan.remindersSent = sent;

@@ -3,8 +3,11 @@ import { rm } from 'node:fs/promises';
 import gqlTag from 'graphql-tag';
 import {
   LanguageCode,
+  Order,
   PaymentMethodHandler,
   RequestContext,
+  RequestContextService,
+  TransactionalConnection,
 } from '@vendure/core';
 import {
   createTestEnvironment,
@@ -207,6 +210,129 @@ describe('Lipa mdogo plugin', () => {
     );
     const loaded = await shopClient.query(ActivePlan);
     expect(loaded.activeOrder.lipaMdogoPlan.state).toBe('Active');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a start when there is no active order', async () => {
+    await shopClient.asUserWithCredentials(customerEmail, 'test');
+    await expect(
+      shopClient.query(Start, {
+        input: {
+          minimumPayment: 100,
+          deadline: '2026-11-12T15:00:00.000Z',
+        },
+      })
+    ).rejects.toThrow('No active order found for session');
+  });
+
+  it('rejects a start when the order has no customer', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const active = await shopClient.query(ActivePlan);
+    const requestContextService = server.app.get(RequestContextService);
+    const connection = server.app.get(TransactionalConnection);
+    const ctx = await requestContextService.create({ apiType: 'admin' });
+    const id = Number.parseInt(active.activeOrder.id.replace(/^T_/, ''), 10);
+    await connection.getRepository(ctx, Order).update(id, { customer: null });
+    await expect(
+      shopClient.query(Start, {
+        input: {
+          minimumPayment: 100,
+          deadline: '2026-11-12T15:00:00.000Z',
+        },
+      })
+    ).rejects.toThrow('No customer found for active order');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a start when the order is not ArrangingPayment', async () => {
+    await shopClient.asUserWithCredentials(customerEmail, 'test');
+    await addItem(shopClient, 1, 1);
+    await expect(
+      shopClient.query(Start, {
+        input: {
+          minimumPayment: 100,
+          deadline: '2026-11-12T15:00:00.000Z',
+        },
+      })
+    ).rejects.toThrow('Lipa mdogo requires the order to be ArrangingPayment.');
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a minimum that is not a positive integer', async () => {
+    await arrangeArrangingPayment(shopClient);
+    await expect(
+      shopClient.query(Start, {
+        input: {
+          minimumPayment: 0,
+          deadline: '2026-11-12T15:00:00.000Z',
+        },
+      })
+    ).rejects.toThrow('minimumPayment must be a positive integer.');
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a minimum above the order total', async () => {
+    await arrangeArrangingPayment(shopClient);
+    await expect(
+      shopClient.query(Start, {
+        input: {
+          minimumPayment: 2_000_000_000,
+          deadline: '2026-11-12T15:00:00.000Z',
+        },
+      })
+    ).rejects.toThrow('minimumPayment cannot exceed the order total.');
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a deadline that is not in the future', async () => {
+    await arrangeArrangingPayment(shopClient);
+    await expect(
+      shopClient.query(Start, {
+        input: {
+          minimumPayment: 100,
+          deadline: '2026-10-13T12:00:00.000Z',
+        },
+      })
+    ).rejects.toThrow('deadline must be in the future.');
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a negative reminder offset', async () => {
+    await arrangeArrangingPayment(shopClient);
+    await expect(
+      shopClient.query(Start, {
+        input: {
+          minimumPayment: 100,
+          deadline: '2026-11-12T15:00:00.000Z',
+          reminderDaysBefore: [-1],
+        },
+      })
+    ).rejects.toThrow(
+      'reminderDaysBefore must be a list of integers greater than or equal to zero.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a second plan on the same order', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const input = {
+      minimumPayment: 100,
+      deadline: '2026-11-12T15:00:00.000Z',
+    };
+    await shopClient.query(Start, { input });
+    await expect(shopClient.query(Start, { input })).rejects.toThrow(
+      'This order already has a lipa mdogo plan.'
+    );
     await cancelActiveOrder(shopClient);
   });
 });

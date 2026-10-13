@@ -56,6 +56,39 @@ export class LipaMdogoService {
     if (!order) {
       throw new UserInputError('No active order found for session');
     }
+    if (order.state !== 'ArrangingPayment') {
+      throw new UserInputError(
+        'Lipa mdogo requires the order to be ArrangingPayment.'
+      );
+    }
+    if (!order.customer) {
+      throw new UserInputError('No customer found for active order');
+    }
+    if (!Number.isInteger(input.minimumPayment) || input.minimumPayment <= 0) {
+      throw new UserInputError('minimumPayment must be a positive integer.');
+    }
+    if (input.minimumPayment > order.totalWithTax) {
+      throw new UserInputError('minimumPayment cannot exceed the order total.');
+    }
+    if (input.deadline.getTime() <= this.clock().getTime()) {
+      throw new UserInputError('deadline must be in the future.');
+    }
+    if (
+      input.reminderDaysBefore != null &&
+      !input.reminderDaysBefore.every(
+        (day) => Number.isInteger(day) && day >= 0
+      )
+    ) {
+      throw new UserInputError(
+        'reminderDaysBefore must be a list of integers greater than or equal to zero.'
+      );
+    }
+    const existing = await this.connection
+      .getRepository(ctx, LipaMdogoPlan)
+      .findOne({ where: { order: { id: order.id } } });
+    if (existing) {
+      throw new UserInputError('This order already has a lipa mdogo plan.');
+    }
 
     const reminderDaysBefore = uniqueOffsets(input.reminderDaysBefore);
     const now = this.clock();

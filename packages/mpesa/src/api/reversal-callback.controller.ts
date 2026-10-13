@@ -8,6 +8,7 @@ import {
 
 import { REVERSAL_CALLBACK_ENDPOINT, loggerCtx } from '../constants';
 import { MpesaService } from '../service/mpesa.service';
+import { buildLogMessage } from '../service/log-provider-error';
 import { type ReversalCallbackPayload } from '../types';
 
 @Controller(REVERSAL_CALLBACK_ENDPOINT)
@@ -19,10 +20,14 @@ export class ReversalCallbackController {
 
   @Post()
   async handleCallback(@Body() payload: ReversalCallbackPayload) {
-    const { ResultType, ResultDesc, TransactionID } = payload.Result;
+    const { ResultCode, ResultDesc, TransactionID } = payload.Result;
 
-    Logger.info(
-      `Reversal callback ${ResultType}: Transaction ${TransactionID} ${ResultDesc}`,
+    Logger.debug(
+      buildLogMessage('M-Pesa reversal callback received', {
+        transactionId: TransactionID,
+        resultCode: ResultCode,
+        resultDesc: ResultDesc,
+      }),
       loggerCtx
     );
 

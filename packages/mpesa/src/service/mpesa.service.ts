@@ -17,7 +17,7 @@ import {
   TransactionalConnection,
   isGraphQlErrorResult,
 } from '@vendure/core';
-import axios, { AxiosError, AxiosInstance } from 'axios';
+import axios, { AxiosInstance } from 'axios';
 
 import { mpesaPaymentMethodHandler } from '../config/mpesa.handler';
 import {
@@ -39,6 +39,7 @@ import {
   TokenResponse,
 } from '../types';
 import { formatPhoneNumber } from '../util/phone-utils';
+import { buildLogMessage, logProviderError } from './log-provider-error';
 
 export class MpesaSettleRejection extends Error {
   constructor(message: string) {
@@ -200,6 +201,14 @@ export class MpesaService {
       );
 
       if (data.ResponseCode !== '0') {
+        Logger.error(
+          buildLogMessage('M-Pesa STK push failed', {
+            orderCode: code,
+            responseCode: data.ResponseCode,
+            responseDescription: data.ResponseDescription,
+          }),
+          loggerCtx
+        );
         return {
           success: false,
           transactionId: '',
@@ -219,13 +228,7 @@ export class MpesaService {
         message: data.ResponseDescription,
       };
     } catch (error) {
-      Logger.error(
-        `Could not initiate STK push ${(error as Error).message}`,
-        loggerCtx
-      );
-      if (error instanceof AxiosError) {
-        Logger.error(JSON.stringify(error.response?.data, null, 2), loggerCtx);
-      }
+      logProviderError('M-Pesa STK push failed', error, { orderCode: code });
 
       return {
         success: false,
@@ -235,7 +238,14 @@ export class MpesaService {
     }
   }
 
-  async checkTransactionStatus(config: MpesaConfig, transactionId: string) {
+  async checkTransactionStatus(
+    config: MpesaConfig,
+    transactionId: string
+  ): Promise<{
+    isSuccessful: boolean;
+    message: string;
+    requestFailed?: boolean;
+  }> {
     const client = await this.getRequestClient(config);
 
     const { shortCode } = config;
@@ -257,18 +267,14 @@ export class MpesaService {
 
       return { isSuccessful, message: data.ResultDesc };
     } catch (error) {
-      Logger.error(
-        `Couldn't query transaction ${transactionId} status`,
-        loggerCtx
-      );
-
-      if (error instanceof AxiosError) {
-        Logger.error(JSON.stringify(error.response?.data, null, 2), loggerCtx);
-      }
+      logProviderError('M-Pesa STK status query failed', error, {
+        checkoutRequestId: transactionId,
+      });
 
       return {
         isSuccessful: false,
         message: 'Could not query transaction status',
+        requestFailed: true,
       };
     }
   }
@@ -320,8 +326,10 @@ export class MpesaService {
       CheckoutRequestID
     );
     if (existingPayment) {
-      Logger.info(
-        `STK callback already processed for ${CheckoutRequestID}, skipping`,
+      Logger.debug(
+        buildLogMessage('M-Pesa STK callback already processed', {
+          checkoutRequestId: CheckoutRequestID,
+        }),
         loggerCtx
       );
       return;
@@ -329,10 +337,6 @@ export class MpesaService {
 
     const isSuccess = ResultCode === 0;
     if (!isSuccess) {
-      Logger.warn(
-        `Transaction ${CheckoutRequestID} failed. ${payload.Body.stkCallback.ResultDesc}`,
-        loggerCtx
-      );
       const order = await this.connection.getRepository(ctx, Order).findOne({
         where: {
           customFields: {
@@ -340,6 +344,15 @@ export class MpesaService {
           },
         },
       });
+      Logger.warn(
+        buildLogMessage('M-Pesa STK callback failed', {
+          checkoutRequestId: CheckoutRequestID,
+          resultCode: ResultCode,
+          resultDesc: payload.Body.stkCallback.ResultDesc,
+          orderCode: order?.code,
+        }),
+        loggerCtx
+      );
       if (!order) return;
       await this.orderService.updateCustomFields(ctx, order.id, {
         mpesaCheckoutRequestID: null,
@@ -371,9 +384,12 @@ export class MpesaService {
       config,
       CheckoutRequestID
     );
-    if (!queryResult.isSuccessful) {
+    if (!queryResult.isSuccessful && !queryResult.requestFailed) {
       Logger.warn(
-        `STK query failed for transaction ${CheckoutRequestID}: ${queryResult.message}`,
+        buildLogMessage('M-Pesa STK status query was not successful', {
+          checkoutRequestId: CheckoutRequestID,
+          message: queryResult.message,
+        }),
         loggerCtx
       );
     }
@@ -440,7 +456,10 @@ export class MpesaService {
         throw new MpesaSettleRejection(added.message);
       }
       Logger.info(
-        `Mpesa Payment ${receipt} added to order ${fresh.code}`,
+        buildLogMessage('M-Pesa payment added', {
+          orderCode: fresh.code,
+          receipt,
+        }),
         loggerCtx
       );
       return;
@@ -461,6 +480,13 @@ export class MpesaService {
     if (isGraphQlErrorResult(payment)) {
       throw new MpesaSettleRejection(payment.message);
     }
+    Logger.info(
+      buildLogMessage('M-Pesa payment added', {
+        orderCode: fresh.code,
+        receipt,
+      }),
+      loggerCtx
+    );
   }
 
   async reversePayment(
@@ -471,7 +497,9 @@ export class MpesaService {
     const payment = await this.getPaymentByTransactionId(ctx, transactionId);
     if (!payment) {
       Logger.warn(
-        `No payment found for transaction ${transactionId}`,
+        buildLogMessage('No M-Pesa payment found for refund', {
+          transactionId,
+        }),
         loggerCtx
       );
       return {
@@ -485,6 +513,12 @@ export class MpesaService {
 
     const receipt = payment.metadata.mpesaReceiptNumber;
     if (typeof receipt !== 'string' || receipt.length === 0) {
+      Logger.warn(
+        buildLogMessage('M-Pesa payment has no receipt', {
+          transactionId,
+        }),
+        loggerCtx
+      );
       return {
         state: 'Failed',
         transactionId: '',
@@ -517,6 +551,13 @@ export class MpesaService {
       );
 
       if (data.ResponseCode !== '0') {
+        Logger.error(
+          buildLogMessage('M-Pesa reversal failed', {
+            transactionId,
+            responseCode: data.ResponseCode,
+          }),
+          loggerCtx
+        );
         return {
           state: 'Failed',
           transactionId: receipt,
@@ -531,10 +572,7 @@ export class MpesaService {
         },
       };
     } catch (error) {
-      Logger.error(`Could not reverse payment ${transactionId}`, loggerCtx);
-      if (error instanceof AxiosError) {
-        Logger.error(JSON.stringify(error.response?.data, null, 2), loggerCtx);
-      }
+      logProviderError('M-Pesa reversal failed', error, { transactionId });
       return {
         state: 'Failed',
         transactionId: receipt,
@@ -554,7 +592,9 @@ export class MpesaService {
 
     if (!refund) {
       Logger.warn(
-        `No refund found for transaction ${TransactionID}`,
+        buildLogMessage('No M-Pesa refund found', {
+          transactionId: TransactionID,
+        }),
         loggerCtx
       );
       return;
@@ -565,10 +605,21 @@ export class MpesaService {
         id: refund.id,
         transactionId: TransactionID,
       });
-      Logger.info(`Refund ${TransactionID} settled`, loggerCtx);
+      Logger.info(
+        buildLogMessage('M-Pesa refund settled', {
+          transactionId: TransactionID,
+        }),
+        loggerCtx
+      );
     } else {
       await this.orderService.transitionRefundToState(ctx, refund.id, 'Failed');
-      Logger.info(`Refund ${TransactionID} failed. ${ResultDesc}`, loggerCtx);
+      Logger.error(
+        buildLogMessage('M-Pesa refund failed', {
+          transactionId: TransactionID,
+          resultDesc: ResultDesc,
+        }),
+        loggerCtx
+      );
     }
   }
 
@@ -582,10 +633,6 @@ export class MpesaService {
     });
 
     if (!payment) {
-      Logger.info(
-        `There isn't a payment related with the transaction ID ${transactionId}`,
-        loggerCtx
-      );
       return;
     }
 
@@ -600,7 +647,10 @@ export class MpesaService {
       });
 
     if (!paymentMethod) {
-      Logger.error('Mpesa payment method not found', loggerCtx);
+      Logger.error(
+        buildLogMessage('M-Pesa payment method not found'),
+        loggerCtx
+      );
       throw new Error('Mpesa payment method not found');
     }
 
@@ -678,13 +728,10 @@ export class MpesaService {
 
       return data.access_token;
     } catch (error) {
-      Logger.error(
-        'Could not authenticate to the Mpesa API. Please check your consumer key, secret and environment configuration.',
-        loggerCtx
+      logProviderError(
+        'Could not authenticate to the M-Pesa API. Check the consumer key, secret, and environment.',
+        error
       );
-      if (error instanceof AxiosError) {
-        Logger.error(JSON.stringify(error.response?.data, null, 2), loggerCtx);
-      }
       return '';
     }
   }

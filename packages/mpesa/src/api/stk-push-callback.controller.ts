@@ -22,6 +22,7 @@ import {
   loggerCtx,
 } from '../constants';
 import { MpesaService, MpesaSettleRejection } from '../service/mpesa.service';
+import { buildLogMessage } from '../service/log-provider-error';
 import { type STKCallbackPayload } from '../types';
 
 function getClientIp(req: express.Request): string {
@@ -51,7 +52,7 @@ export class StkPushCallbackController {
     const clientIp = getClientIp(req);
     if (!this.allowlist.includes(clientIp)) {
       Logger.warn(
-        `STK Push callback rejected: client IP ${clientIp} not in allowlist`,
+        buildLogMessage('M-Pesa STK callback rejected', { clientIp }),
         loggerCtx
       );
       throw new ForbiddenException();
@@ -60,8 +61,12 @@ export class StkPushCallbackController {
     const { CheckoutRequestID, ResultCode, ResultDesc } =
       payload.Body.stkCallback;
 
-    Logger.info(
-      `STK Push callback ${ResultCode}: Transaction ${CheckoutRequestID} ${ResultDesc}`,
+    Logger.debug(
+      buildLogMessage('M-Pesa STK callback received', {
+        checkoutRequestId: CheckoutRequestID,
+        resultCode: ResultCode,
+        resultDesc: ResultDesc,
+      }),
       loggerCtx
     );
 
@@ -70,7 +75,13 @@ export class StkPushCallbackController {
       await this.mpesaService.handleStkPushCallback(ctx, payload);
     } catch (error) {
       if (error instanceof MpesaSettleRejection) {
-        Logger.error(error.message, loggerCtx);
+        Logger.error(
+          buildLogMessage(error.message, {
+            checkoutRequestId: CheckoutRequestID,
+          }),
+          loggerCtx,
+          error.stack
+        );
         return;
       }
       throw error;

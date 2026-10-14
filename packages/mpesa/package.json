@@ -1,0 +1,21 @@
+{
+  "name": "@monkish/vendure-mpesa-plugin",
+  "version": "0.0.1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MonkishTech/monkish-vendure-plugins.git"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "libphonenumber-js": "^1.10.54"
+  },
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "typings": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}

@@ -2,6 +2,7 @@ import { Args, Mutation, ResolveField, Resolver } from '@nestjs/graphql';
 import {
   Allow,
   Ctx,
+  Order,
   Permission,
   RequestContext,
   UnauthorizedError,
@@ -29,6 +30,18 @@ export class PaystackResolver {
     }
 
     return this.paystackService.initializeTransaction(ctx, input);
+  }
+
+  @Mutation()
+  @Allow(Permission.Owner)
+  async confirmPaystackPayment(
+    @Ctx() ctx: RequestContext,
+    @Args() args: { reference: string }
+  ): Promise<Order> {
+    if (!ctx.authorizedAsOwnerOnly) {
+      throw new UnauthorizedError();
+    }
+    return this.paystackService.confirmPayment(ctx, args.reference);
   }
 
   @ResolveField()

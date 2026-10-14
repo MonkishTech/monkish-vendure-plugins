@@ -1,0 +1,101 @@
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Post,
+  Req,
+} from '@nestjs/common';
+import {
+  ChannelService,
+  LanguageCode,
+  Logger,
+  RequestContext,
+} from '@vendure/core';
+import * as express from 'express';
+
+import {
+  STK_PUSH_CALLBACK_ENDPOINT,
+  STK_PUSH_CALLBACK_ALLOWLIST,
+  loggerCtx,
+} from '../constants';
+import { MpesaService, MpesaSettleRejection } from '../service/mpesa.service';
+import { buildLogMessage } from '../service/log-provider-error';
+import { type STKCallbackPayload } from '../types';
+
+function getClientIp(req: express.Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string') {
+    const first = forwarded.split(',')[0];
+    return first?.trim() ?? '';
+  }
+  return req.ip ?? req.socket?.remoteAddress ?? '';
+}
+
+@Controller(STK_PUSH_CALLBACK_ENDPOINT)
+export class StkPushCallbackController {
+  constructor(
+    private channelService: ChannelService,
+    private mpesaService: MpesaService,
+    @Inject(STK_PUSH_CALLBACK_ALLOWLIST)
+    private allowlist: readonly string[]
+  ) {}
+
+  @Post()
+  @HttpCode(HttpStatus.OK)
+  async handleCallback(
+    @Req() req: express.Request,
+    @Body() payload: STKCallbackPayload
+  ) {
+    const clientIp = getClientIp(req);
+    if (!this.allowlist.includes(clientIp)) {
+      Logger.warn(
+        buildLogMessage('M-Pesa STK callback rejected', { clientIp }),
+        loggerCtx
+      );
+      throw new ForbiddenException();
+    }
+
+    const { CheckoutRequestID, ResultCode, ResultDesc } =
+      payload.Body.stkCallback;
+
+    Logger.debug(
+      buildLogMessage('M-Pesa STK callback received', {
+        checkoutRequestId: CheckoutRequestID,
+        resultCode: ResultCode,
+        resultDesc: ResultDesc,
+      }),
+      loggerCtx
+    );
+
+    const ctx = await this.createRequestContext();
+    try {
+      await this.mpesaService.handleStkPushCallback(ctx, payload);
+    } catch (error) {
+      if (error instanceof MpesaSettleRejection) {
+        Logger.error(
+          buildLogMessage(error.message, {
+            checkoutRequestId: CheckoutRequestID,
+          }),
+          loggerCtx,
+          error.stack
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async createRequestContext(): Promise<RequestContext> {
+    const channel = await this.channelService.getDefaultChannel();
+    return new RequestContext({
+      apiType: 'admin',
+      isAuthorized: true,
+      authorizedAsOwnerOnly: false,
+      channel,
+      languageCode: LanguageCode.en,
+    });
+  }
+}

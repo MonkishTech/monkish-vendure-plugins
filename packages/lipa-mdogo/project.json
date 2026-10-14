@@ -1,0 +1,26 @@
+{
+  "name": "lipa-mdogo",
+  "sourceRoot": "packages/lipa-mdogo/src",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "options": {
+        "rootDir": "packages/lipa-mdogo/src",
+        "outputPath": "packages/lipa-mdogo/dist",
+        "main": "packages/lipa-mdogo/src/index.ts",
+        "tsConfig": "packages/lipa-mdogo/tsconfig.lib.json"
+      }
+    },
+    "test": {
+      "executor": "@nx/vite:test"
+    },
+    "publish-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "packages/lipa-mdogo",
+        "commands": ["yarn npm publish"]
+      }
+    }
+  }
+}

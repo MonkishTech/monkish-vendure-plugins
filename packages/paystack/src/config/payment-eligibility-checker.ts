@@ -4,6 +4,7 @@ import {
   PaymentMethodEligibilityChecker,
 } from '@vendure/core';
 import { loggerCtx, SUPPORTED_CURRENCICES } from '../constants';
+import { buildLogMessage } from '../service/log-provider-error';
 
 export const paystackEligibilityChecker = new PaymentMethodEligibilityChecker({
   code: 'paystack-eligibility-checker',
@@ -16,11 +17,11 @@ export const paystackEligibilityChecker = new PaymentMethodEligibilityChecker({
   args: {},
   check: async (_, order) => {
     if (!SUPPORTED_CURRENCICES.includes(order.currencyCode)) {
-      Logger.info(
-        `
-              Currency code ${order.currencyCode} is not supported by Paystack. 
-              Supported currencies are: ${SUPPORTED_CURRENCICES.join(', ')}
-            `,
+      Logger.debug(
+        buildLogMessage('Paystack currency is not supported', {
+          orderCode: order.code,
+          currencyCode: order.currencyCode,
+        }),
         loggerCtx
       );
       return false;

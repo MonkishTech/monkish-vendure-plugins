@@ -19,6 +19,8 @@ export type PaystackPaymentIntentInput = VariablesOf<
   typeof CreatePaystackPaymentIntent
 >['input'] & {
   paystackAmount?: number | null;
+  chargeAmount?: number | null;
+  settlementAmount?: number | null;
 };
 
 export type PaystackPaymentIntentResult = ResultOf<
@@ -152,6 +154,7 @@ export type VerificationResponse = PaystackResponse & {
     createdAt: string;
     requested_amount: number;
     transaction_date: string;
+    metadata?: Record<string, unknown> | null;
   };
 };
 

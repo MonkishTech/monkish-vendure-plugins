@@ -2,7 +2,7 @@
 
 ![NPM Version](https://img.shields.io/npm/v/@monkish/vendure-lipa-mdogo-plugin)
 
-An order can be paid any amount until a deadline, at or above a minimum. The plugin stores that plan on the order and reports what is still owed. The host charges the customer through Paystack or M-Pesa and passes the amount as `settlementAmount`. This plugin does not charge.
+An order for one variant can be paid until the deadline an admin set on that variant. Any quantity of that variant is allowed. The admin also sets a deposit per unit. The plugin stores the plan on the order and reports what is still owed. Until settled payments cover the deposit, the next charge is at least the unpaid deposit. After that, the next charge can be any amount from 1 minor unit up to the balance. The host charges the customer through Paystack or M-Pesa and passes the amount as `settlementAmount`. This plugin does not charge.
 
 ## Installation
 
@@ -20,7 +20,7 @@ import { LipaMdogoPlugin } from '@monkish/vendure-lipa-mdogo-plugin';
 plugins: [LipaMdogoPlugin];
 ```
 
-`LipaMdogoPlugin.init` can replace either strategy. `planStrategy` defaults to any amount until a deadline. `missedPaymentStrategy` defaults to refunding every settled payment and cancelling the order.
+`LipaMdogoPlugin.init` can replace either strategy. `planStrategy` defaults to `anyAmountUntilDeadline`, whose `minimumDue(deposit, settled, outstanding)` follows the deposit rule below. `missedPaymentStrategy` defaults to refunding every settled payment and cancelling the order.
 
 ```ts
 import {
@@ -35,16 +35,27 @@ plugins: [
 ];
 ```
 
+## Variant fields
+
+The plugin adds three public custom fields to each product variant. Set them in the admin product editor. A variant accepts a plan only when `lipaMdogoEnabled` is true. Existing variants default to off.
+
+| Field | Meaning |
+| --- | --- |
+| `lipaMdogoEnabled` | Boolean. Default `false`. |
+| `lipaMdogoMinimum` | Deposit for one unit, in minor units. Default `0`. The order deposit is this value times the quantity. |
+| `lipaMdogoDeadline` | Datetime. A plan cannot start once this moment has passed. The plan stores this value as its deadline. |
+
+Every line in the order must be that same variant. A second variant makes `startLipaMdogoPlan` fail. Shipping and other order charges stay inside the order total and are part of the same plan. Changing these fields later does not change a plan that already exists.
+
 ## Starting a plan
 
-The active order is in `ArrangingPayment` and has a customer. The host passes `minimumPayment`, `deadline`, and optionally `reminderDaysBefore`.
+The active order is in `ArrangingPayment`, has a customer, and contains one enabled variant. The host may pass `reminderDaysBefore`. The shopper does not send a deposit or a deadline.
 
 Omitting `reminderDaysBefore` stores 7 days, 1 day, and the deadline's UTC day. An empty list stores no reminders. An offset that is already due when the plan starts is recorded as sent and does not publish a reminder.
 
 ```graphql
 mutation StartLipaMdogoPlan($input: StartLipaMdogoPlanInput!) {
   startLipaMdogoPlan(input: $input) {
-    minimumPayment
     deadline
     outstanding
     minimumDue
@@ -53,13 +64,15 @@ mutation StartLipaMdogoPlan($input: StartLipaMdogoPlanInput!) {
 }
 ```
 
-`Order.lipaMdogoPlan` returns the same fields on the shop order and on the admin order query.
+`Order.lipaMdogoPlan` returns the same fields on the shop order and on the admin order query. `deadline` is the variant's `lipaMdogoDeadline` at the time the plan started.
 
 ## Amounts
 
-Amounts are minor units. `outstanding` is the order total minus settled payments. `minimumDue` is the stored minimum, or `outstanding` when that is smaller.
+Amounts are minor units. The deposit stored on the plan is `lipaMdogoMinimum` times quantity. It is not a GraphQL field. `outstanding` is the order total minus settled payments. The plan does not freeze `totalWithTax`.
 
-The host may charge any amount from `minimumDue` through `outstanding`. Pass that amount to Paystack or M-Pesa as `settlementAmount`. The plan does not freeze `totalWithTax`.
+`minimumDue` is the unpaid deposit, or `outstanding` when that is smaller. After settled payments cover the deposit, `minimumDue` is 1 minor unit, or `outstanding` when that is smaller. When `outstanding` is 0 or less, `minimumDue` is 0.
+
+The host may charge any amount from `minimumDue` through `outstanding`. The first charge can be larger than the deposit. Pass that amount to Paystack or M-Pesa as `settlementAmount`.
 
 ## Scheduled task
 
@@ -94,11 +107,14 @@ A repeated `daysBefore` for the same plan is the same reminder.
 `startLipaMdogoPlan` throws `UserInputError` and writes no plan row when:
 
 - `No active order found for session`
-- `No customer found for active order`
 - `Lipa mdogo requires the order to be ArrangingPayment.`
-- `minimumPayment must be a positive integer.`
-- `minimumPayment cannot exceed the order total.`
-- `deadline must be in the future.`
+- `No customer found for active order`
+- `Lipa mdogo requires every line to be the same variant.`
+- `This variant is not enabled for lipa mdogo.`
+- `lipaMdogoMinimum must be a positive integer.`
+- `lipaMdogoDeadline is required.`
+- `lipaMdogoDeadline must be in the future.`
+- `The lipa mdogo deposit cannot exceed the order total.`
 - `reminderDaysBefore must be a list of integers greater than or equal to zero.`
 - `This order already has a lipa mdogo plan.`
 

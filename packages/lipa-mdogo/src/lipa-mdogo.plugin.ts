@@ -1,6 +1,7 @@
 import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 
 import { adminApiExtensions, shopApiExtensions } from './api/api-extensions';
+import { addLipaMdogoCustomFields } from './custom-fields';
 import {
   LipaMdogoOrderResolver,
   LipaMdogoShopResolver,
@@ -34,6 +35,7 @@ export interface LipaMdogoPluginOptions {
     resolvers: [LipaMdogoOrderResolver],
   },
   configuration: (config) => {
+    addLipaMdogoCustomFields(config);
     config.schedulerOptions.tasks.push(lipaMdogoPlansTask);
     return config;
   },

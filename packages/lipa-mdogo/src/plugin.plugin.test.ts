@@ -97,6 +97,8 @@ describe('Lipa mdogo plugin', () => {
   });
 
   let customerEmail = '';
+  let variantA = '';
+  let variantB = '';
 
   beforeAll(async () => {
     registerInitializer('sqljs', new SqljsInitializer(TEST_DB_DIR));
@@ -117,6 +119,17 @@ describe('Lipa mdogo plugin', () => {
       customerCount: 2,
     });
     await adminClient.asSuperAdmin();
+    const variants = await adminClient.query(gqlTag`
+      query Variants {
+        productVariants(options: { take: 2, sort: { id: ASC } }) {
+          items {
+            id
+          }
+        }
+      }
+    `);
+    variantA = variants.productVariants.items[0].id;
+    variantB = variants.productVariants.items[1].id;
     customerEmail = (await getCustomerList(adminClient, { take: 1 })).customers
       .items[0].emailAddress;
   }, 120000);
@@ -130,6 +143,75 @@ describe('Lipa mdogo plugin', () => {
     clock.now = new Date('2026-10-13T12:00:00.000Z');
     paymentControl.deduct = 0;
     refundControl.fail = false;
+  });
+
+  it('exposes lipa mdogo fields on a variant', async () => {
+    const deadline = '2026-11-12T15:00:00.000Z';
+    await adminClient.query(
+      gqlTag`
+        mutation Enable($input: [UpdateProductVariantInput!]!) {
+          updateProductVariants(input: $input) {
+            id
+          }
+        }
+      `,
+      {
+        input: [
+          {
+            id: variantA,
+            customFields: {
+              lipaMdogoEnabled: true,
+              lipaMdogoMinimum: 100,
+              lipaMdogoDeadline: deadline,
+            },
+          },
+        ],
+      }
+    );
+    await shopClient.asUserWithCredentials(customerEmail, 'test');
+    await addItem(shopClient, variantA, 1);
+    const loaded = await shopClient.query(gqlTag`
+      query LineFields {
+        activeOrder {
+          lines {
+          productVariant {
+            customFields {
+              lipaMdogoEnabled
+              lipaMdogoMinimum
+              lipaMdogoDeadline
+            }
+          }
+          }
+        }
+      }
+    `);
+    expect(
+      loaded.activeOrder.lines[0].productVariant.customFields
+    ).toMatchObject({
+      lipaMdogoEnabled: true,
+      lipaMdogoMinimum: 100,
+      lipaMdogoDeadline: deadline,
+    });
+    const untouched = await adminClient.query(
+      gqlTag`
+        query Other($id: ID!) {
+        productVariant(id: $id) {
+          customFields {
+            lipaMdogoEnabled
+            lipaMdogoMinimum
+            lipaMdogoDeadline
+          }
+        }
+        }
+      `,
+      { id: variantB }
+    );
+    expect(untouched.productVariant.customFields).toMatchObject({
+      lipaMdogoEnabled: false,
+      lipaMdogoMinimum: 0,
+      lipaMdogoDeadline: null,
+    });
+    await cancelActiveOrder(shopClient);
   });
 
   async function arrangeArrangingPayment(client: SimpleGraphQLClient) {

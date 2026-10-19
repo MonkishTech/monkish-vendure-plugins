@@ -78,7 +78,16 @@ The existing plugin test covers the behavior. Each rejected start leaves `lipaMd
 - A settled payment that covers part of the deposit leaves `minimumDue` as the remainder. A settled payment that covers the deposit leaves `minimumDue` at 1, or at `outstanding` when that is smaller.
 - Reminders, completion, and a missed deadline still behave as they do now. The start input supplies `reminderDaysBefore` only.
 
-The README documents the three variant fields, the new start input, the deposit rule, and the error list.
+## Plugin docs
+
+Update `packages/lipa-mdogo/README.md` in the same change. The repo root README only links to that file and stays as it is.
+
+- Opening paragraph: a plan is available for one admin-enabled variant, at any quantity, until that variant's deadline.
+- Server setup: `anyAmountUntilDeadline` takes a deposit, a settled total, and an outstanding balance.
+- Add a Variant fields section for `lipaMdogoEnabled`, `lipaMdogoMinimum`, and `lipaMdogoDeadline`, including the single-variant rule and the deposit formula.
+- Starting a plan: the mutation input is only `reminderDaysBefore`. The returned plan has `deadline`, `outstanding`, `minimumDue`, and `state`.
+- Amounts: `minimumDue` follows the deposit rule, then 1 minor unit.
+- Errors: replace the `minimumPayment` and shopper `deadline` errors with the list in this spec.
 
 ## Out of scope
 

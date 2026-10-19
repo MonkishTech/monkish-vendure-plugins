@@ -19,7 +19,8 @@ export class LipaMdogoPlan extends VendureEntity {
   @Column()
   deposit!: number;
 
-  @Column({ type: 'datetime' })
+  // Postgres has no datetime type. Date becomes timestamp there and datetime on SQLite.
+  @Column({ type: Date })
   deadline!: Date;
 
   @Column('simple-json')

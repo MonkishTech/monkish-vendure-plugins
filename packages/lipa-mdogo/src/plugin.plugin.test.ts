@@ -680,4 +680,131 @@ describe('Lipa mdogo plugin', () => {
     expect(loaded.order.lipaMdogoPlan.state).toBe('Active');
     await cancelActiveOrder(shopClient);
   });
+
+  it('rejects an order whose lines are different variants', async () => {
+    await shopClient.asUserWithCredentials(customerEmail, 'test');
+    await addItem(shopClient, variantA, 1);
+    await addItem(shopClient, variantB, 1);
+    await arrangeArrangingPayment(shopClient);
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'Lipa mdogo requires every line to be the same variant.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects an order with no lines', async () => {
+    await arrangeArrangingPayment(shopClient);
+    const active = await shopClient.query(ActivePlan);
+    const requestContextService = server.app.get(RequestContextService);
+    const connection = server.app.get(TransactionalConnection);
+    const ctx = await requestContextService.create({ apiType: 'admin' });
+    const id = Number.parseInt(active.activeOrder.id.replace(/^T_/, ''), 10);
+    const order = await connection.getRepository(ctx, Order).findOne({
+      where: { id },
+      relations: { lines: true },
+    });
+    if (!order) {
+      throw new Error('Order was not loaded');
+    }
+    await connection.getRepository(ctx, Order).manager.remove(order.lines);
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'Lipa mdogo requires every line to be the same variant.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a variant that is not enabled', async () => {
+    await adminClient.query(
+      gqlTag`
+        mutation Disable($input: [UpdateProductVariantInput!]!) {
+          updateProductVariants(input: $input) {
+            id
+          }
+        }
+      `,
+      {
+        input: [
+          {
+            id: variantA,
+            customFields: { lipaMdogoEnabled: false },
+          },
+        ],
+      }
+    );
+    await arrangeArrangingPayment(shopClient);
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'This variant is not enabled for lipa mdogo.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a minimum that is not a positive integer', async () => {
+    await allowPlan(variantA, { minimum: 0 });
+    await arrangeArrangingPayment(shopClient);
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'lipaMdogoMinimum must be a positive integer.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a missing deadline', async () => {
+    await adminClient.query(
+      gqlTag`
+        mutation Allow($input: [UpdateProductVariantInput!]!) {
+          updateProductVariants(input: $input) {
+            id
+          }
+        }
+      `,
+      {
+        input: [
+          {
+            id: variantA,
+            customFields: {
+              lipaMdogoEnabled: true,
+              lipaMdogoMinimum: 100,
+              lipaMdogoDeadline: null,
+            },
+          },
+        ],
+      }
+    );
+    await arrangeArrangingPayment(shopClient);
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'lipaMdogoDeadline is required.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a deadline that is not in the future', async () => {
+    await allowPlan(variantA, { deadline: '2026-10-13T12:00:00.000Z' });
+    await arrangeArrangingPayment(shopClient);
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'lipaMdogoDeadline must be in the future.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('rejects a deposit above the order total', async () => {
+    await allowPlan(variantA, { minimum: 2_000_000_000 });
+    await arrangeArrangingPayment(shopClient);
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'The lipa mdogo deposit cannot exceed the order total.'
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
 });

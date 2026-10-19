@@ -2,9 +2,6 @@ import gql from 'graphql-tag';
 
 export const shopApiExtensions = gql`
   input StartLipaMdogoPlanInput {
-    "Minimum payment, in minor units."
-    minimumPayment: Money!
-    deadline: DateTime!
     "Days before the deadline. Defaults to [7, 1, 0]."
     reminderDaysBefore: [Int!]
   }
@@ -16,7 +13,6 @@ export const shopApiExtensions = gql`
   }
 
   type LipaMdogoPlan {
-    minimumPayment: Money!
     deadline: DateTime!
     outstanding: Money!
     minimumDue: Money!
@@ -40,7 +36,6 @@ export const adminApiExtensions = gql`
   }
 
   type LipaMdogoPlan {
-    minimumPayment: Money!
     deadline: DateTime!
     outstanding: Money!
     minimumDue: Money!

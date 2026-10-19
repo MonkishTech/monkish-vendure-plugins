@@ -20,14 +20,13 @@ import {
   LipaMdogoReminderEvent,
 } from '../events';
 import { LipaMdogoPlugin } from '../lipa-mdogo.plugin';
-import { isReminderDue, outstandingBalance } from './amounts';
+import { isReminderDue, outstandingBalance, settledBalance } from './amounts';
 import { RefundSettledPaymentsStrategy } from './missed-payment.strategy';
 import { anyAmountUntilDeadline } from './strategies';
 
 const DEFAULT_REMINDER_DAYS = [7, 1, 0];
 
 export interface ShopLipaMdogoPlan {
-  minimumPayment: number;
   deadline: Date;
   outstanding: number;
   minimumDue: number;
@@ -35,8 +34,6 @@ export interface ShopLipaMdogoPlan {
 }
 
 export interface StartLipaMdogoPlanInput {
-  minimumPayment: number;
-  deadline: Date;
   reminderDaysBefore?: number[] | null;
 }
 
@@ -65,6 +62,8 @@ export class LipaMdogoService {
     const order = await this.orderService.findOne(ctx, sessionOrder.id, [
       'payments',
       'customer',
+      'lines',
+      'lines.productVariant',
     ]);
     if (!order) {
       throw new UserInputError('No active order found for session');
@@ -77,14 +76,37 @@ export class LipaMdogoService {
     if (!order.customer) {
       throw new UserInputError('No customer found for active order');
     }
-    if (!Number.isInteger(input.minimumPayment) || input.minimumPayment <= 0) {
-      throw new UserInputError('minimumPayment must be a positive integer.');
+    const lines = order.lines ?? [];
+    const variantIds = new Set(lines.map((line) => line.productVariantId));
+    if (lines.length === 0 || variantIds.size !== 1) {
+      throw new UserInputError(
+        'Lipa mdogo requires every line to be the same variant.'
+      );
     }
-    if (input.minimumPayment > order.totalWithTax) {
-      throw new UserInputError('minimumPayment cannot exceed the order total.');
+    const variant = lines[0].productVariant;
+    const quantity = lines.reduce((sum, line) => sum + line.quantity, 0);
+    const minimum = variant.customFields.lipaMdogoMinimum;
+    const rawDeadline = variant.customFields.lipaMdogoDeadline;
+    const deadline = rawDeadline == null ? null : new Date(rawDeadline);
+    if (variant.customFields.lipaMdogoEnabled !== true) {
+      throw new UserInputError('This variant is not enabled for lipa mdogo.');
     }
-    if (input.deadline.getTime() <= this.clock().getTime()) {
-      throw new UserInputError('deadline must be in the future.');
+    if (!Number.isInteger(minimum) || minimum <= 0) {
+      throw new UserInputError(
+        'lipaMdogoMinimum must be a positive integer.'
+      );
+    }
+    if (deadline == null || Number.isNaN(deadline.getTime())) {
+      throw new UserInputError('lipaMdogoDeadline is required.');
+    }
+    if (deadline.getTime() <= this.clock().getTime()) {
+      throw new UserInputError('lipaMdogoDeadline must be in the future.');
+    }
+    const deposit = minimum * quantity;
+    if (deposit > order.totalWithTax) {
+      throw new UserInputError(
+        'The lipa mdogo deposit cannot exceed the order total.'
+      );
     }
     if (
       input.reminderDaysBefore != null &&
@@ -109,11 +131,11 @@ export class LipaMdogoService {
       new LipaMdogoPlan({
         order,
         channel: ctx.channel,
-        minimumPayment: input.minimumPayment,
-        deadline: input.deadline,
+        deposit,
+        deadline,
         reminderDaysBefore,
         remindersSent: reminderDaysBefore.filter((offset) =>
-          isReminderDue(now, input.deadline, offset)
+          isReminderDue(now, deadline, offset)
         ),
         state: 'Active',
       })
@@ -242,13 +264,13 @@ export class LipaMdogoService {
 
   private toShopPlan(order: Order, plan: LipaMdogoPlan): ShopLipaMdogoPlan {
     const outstanding = outstandingBalance(order);
+    const settled = settledBalance(order);
     const strategy =
       LipaMdogoPlugin.options.planStrategy ?? anyAmountUntilDeadline;
     return {
-      minimumPayment: plan.minimumPayment,
       deadline: plan.deadline,
       outstanding,
-      minimumDue: strategy.minimumDue(plan.minimumPayment, outstanding),
+      minimumDue: strategy.minimumDue(plan.deposit, settled, outstanding),
       state: plan.state,
     };
   }

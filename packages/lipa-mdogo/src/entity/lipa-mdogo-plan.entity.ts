@@ -17,7 +17,7 @@ export class LipaMdogoPlan extends VendureEntity {
   channel!: Channel;
 
   @Column()
-  minimumPayment!: number;
+  deposit!: number;
 
   @Column({ type: 'datetime' })
   deadline!: Date;

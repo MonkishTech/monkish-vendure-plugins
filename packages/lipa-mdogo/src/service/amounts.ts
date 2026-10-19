@@ -1,10 +1,13 @@
 import { Order } from '@vendure/core';
 
-export function outstandingBalance(order: Order): number {
-  const covered = (order.payments ?? [])
+export function settledBalance(order: Order): number {
+  return (order.payments ?? [])
     .filter((payment) => payment.state === 'Settled')
     .reduce((sum, payment) => sum + payment.amount, 0);
-  return order.totalWithTax - covered;
+}
+
+export function outstandingBalance(order: Order): number {
+  return order.totalWithTax - settledBalance(order);
 }
 
 export function reminderInstant(deadline: Date, daysBefore: number): Date {

@@ -26,8 +26,6 @@ export class LipaMdogoShopResolver {
     @Ctx() ctx: RequestContext,
     @Args('input')
     input: {
-      minimumPayment: number;
-      deadline: string;
       reminderDaysBefore?: number[] | null;
     }
   ) {
@@ -35,8 +33,6 @@ export class LipaMdogoShopResolver {
       throw new UnauthorizedError();
     }
     return this.lipaMdogoService.startPlan(ctx, {
-      minimumPayment: input.minimumPayment,
-      deadline: new Date(input.deadline),
       reminderDaysBefore: input.reminderDaysBefore,
     });
   }

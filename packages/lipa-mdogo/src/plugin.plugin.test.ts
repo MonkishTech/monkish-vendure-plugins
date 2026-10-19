@@ -58,7 +58,6 @@ const testPaymentHandler = new PaymentMethodHandler({
 const Start = gqlTag`
   mutation Start($input: StartLipaMdogoPlanInput!) {
     startLipaMdogoPlan(input: $input) {
-      minimumPayment
       deadline
       outstanding
       minimumDue
@@ -74,8 +73,14 @@ const ActivePlan = gqlTag`
       code
       state
       totalWithTax
+      lines {
+        quantity
+        productVariant {
+          id
+        }
+      }
       lipaMdogoPlan {
-        minimumPayment
+        deadline
         outstanding
         minimumDue
         state
@@ -214,6 +219,34 @@ describe('Lipa mdogo plugin', () => {
     await cancelActiveOrder(shopClient);
   });
 
+  async function allowPlan(
+    variantId: string,
+    options?: { minimum?: number; deadline?: string }
+  ) {
+    await adminClient.query(
+      gqlTag`
+        mutation Allow($input: [UpdateProductVariantInput!]!) {
+          updateProductVariants(input: $input) {
+            id
+          }
+        }
+      `,
+      {
+        input: [
+          {
+            id: variantId,
+            customFields: {
+              lipaMdogoEnabled: true,
+              lipaMdogoMinimum: options?.minimum ?? 100,
+              lipaMdogoDeadline:
+                options?.deadline ?? '2026-11-12T15:00:00.000Z',
+            },
+          },
+        ],
+      }
+    );
+  }
+
   async function arrangeArrangingPayment(client: SimpleGraphQLClient) {
     await client.asUserWithCredentials(customerEmail, 'test');
     const before = await client.query(ActivePlan);
@@ -221,7 +254,7 @@ describe('Lipa mdogo plugin', () => {
       return before.activeOrder;
     }
     if (!before.activeOrder) {
-      await addItem(client, 1, 1);
+      await addItem(client, variantA, 1);
     }
     await client.query(gqlTag`
       mutation {
@@ -287,14 +320,12 @@ describe('Lipa mdogo plugin', () => {
     `);
   }
 
-  it('starts a plan and reports the minimum as the amount due', async () => {
-    const order = await arrangeArrangingPayment(shopClient);
+  it('starts a plan and reports the deposit as the amount due', async () => {
     const deadline = '2026-11-12T15:00:00.000Z';
-    const result = await shopClient.query(Start, {
-      input: { minimumPayment: 100, deadline },
-    });
+    await allowPlan(variantA, { minimum: 100, deadline });
+    const order = await arrangeArrangingPayment(shopClient);
+    const result = await shopClient.query(Start, { input: {} });
     expect(result.startLipaMdogoPlan).toMatchObject({
-      minimumPayment: 100,
       outstanding: order.totalWithTax,
       minimumDue: 100,
       state: 'Active',
@@ -307,16 +338,21 @@ describe('Lipa mdogo plugin', () => {
     await cancelActiveOrder(shopClient);
   });
 
+  it('uses the per-unit deposit times quantity', async () => {
+    await allowPlan(variantA, { minimum: 100 });
+    await shopClient.asUserWithCredentials(customerEmail, 'test');
+    await addItem(shopClient, variantA, 2);
+    await arrangeArrangingPayment(shopClient);
+    const result = await shopClient.query(Start, { input: {} });
+    expect(result.startLipaMdogoPlan.minimumDue).toBe(200);
+    await cancelActiveOrder(shopClient);
+  });
+
   it('rejects a start when there is no active order', async () => {
     await shopClient.asUserWithCredentials(customerEmail, 'test');
-    await expect(
-      shopClient.query(Start, {
-        input: {
-          minimumPayment: 100,
-          deadline: '2026-11-12T15:00:00.000Z',
-        },
-      })
-    ).rejects.toThrow('No active order found for session');
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'No active order found for session'
+    );
   });
 
   it('rejects a start when the order has no customer', async () => {
@@ -327,73 +363,18 @@ describe('Lipa mdogo plugin', () => {
     const ctx = await requestContextService.create({ apiType: 'admin' });
     const id = Number.parseInt(active.activeOrder.id.replace(/^T_/, ''), 10);
     await connection.getRepository(ctx, Order).update(id, { customer: null });
-    await expect(
-      shopClient.query(Start, {
-        input: {
-          minimumPayment: 100,
-          deadline: '2026-11-12T15:00:00.000Z',
-        },
-      })
-    ).rejects.toThrow('No customer found for active order');
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'No customer found for active order'
+    );
     await cancelActiveOrder(shopClient);
   });
 
   it('rejects a start when the order is not ArrangingPayment', async () => {
     await shopClient.asUserWithCredentials(customerEmail, 'test');
     await addItem(shopClient, 1, 1);
-    await expect(
-      shopClient.query(Start, {
-        input: {
-          minimumPayment: 100,
-          deadline: '2026-11-12T15:00:00.000Z',
-        },
-      })
-    ).rejects.toThrow('Lipa mdogo requires the order to be ArrangingPayment.');
-    const loaded = await shopClient.query(ActivePlan);
-    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
-    await cancelActiveOrder(shopClient);
-  });
-
-  it('rejects a minimum that is not a positive integer', async () => {
-    await arrangeArrangingPayment(shopClient);
-    await expect(
-      shopClient.query(Start, {
-        input: {
-          minimumPayment: 0,
-          deadline: '2026-11-12T15:00:00.000Z',
-        },
-      })
-    ).rejects.toThrow('minimumPayment must be a positive integer.');
-    const loaded = await shopClient.query(ActivePlan);
-    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
-    await cancelActiveOrder(shopClient);
-  });
-
-  it('rejects a minimum above the order total', async () => {
-    await arrangeArrangingPayment(shopClient);
-    await expect(
-      shopClient.query(Start, {
-        input: {
-          minimumPayment: 2_000_000_000,
-          deadline: '2026-11-12T15:00:00.000Z',
-        },
-      })
-    ).rejects.toThrow('minimumPayment cannot exceed the order total.');
-    const loaded = await shopClient.query(ActivePlan);
-    expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
-    await cancelActiveOrder(shopClient);
-  });
-
-  it('rejects a deadline that is not in the future', async () => {
-    await arrangeArrangingPayment(shopClient);
-    await expect(
-      shopClient.query(Start, {
-        input: {
-          minimumPayment: 100,
-          deadline: '2026-10-13T12:00:00.000Z',
-        },
-      })
-    ).rejects.toThrow('deadline must be in the future.');
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
+      'Lipa mdogo requires the order to be ArrangingPayment.'
+    );
     const loaded = await shopClient.query(ActivePlan);
     expect(loaded.activeOrder?.lipaMdogoPlan ?? null).toBeNull();
     await cancelActiveOrder(shopClient);
@@ -401,13 +382,10 @@ describe('Lipa mdogo plugin', () => {
 
   it('rejects a negative reminder offset', async () => {
     await arrangeArrangingPayment(shopClient);
+    await allowPlan(variantA, { deadline: '2026-11-12T15:00:00.000Z' });
     await expect(
       shopClient.query(Start, {
-        input: {
-          minimumPayment: 100,
-          deadline: '2026-11-12T15:00:00.000Z',
-          reminderDaysBefore: [-1],
-        },
+        input: { reminderDaysBefore: [-1] },
       })
     ).rejects.toThrow(
       'reminderDaysBefore must be a list of integers greater than or equal to zero.'
@@ -419,26 +397,42 @@ describe('Lipa mdogo plugin', () => {
 
   it('rejects a second plan on the same order', async () => {
     await arrangeArrangingPayment(shopClient);
-    const input = {
-      minimumPayment: 100,
-      deadline: '2026-11-12T15:00:00.000Z',
-    };
-    await shopClient.query(Start, { input });
-    await expect(shopClient.query(Start, { input })).rejects.toThrow(
+    await allowPlan(variantA, { deadline: '2026-11-12T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
+    await expect(shopClient.query(Start, { input: {} })).rejects.toThrow(
       'This order already has a lipa mdogo plan.'
     );
     await cancelActiveOrder(shopClient);
   });
 
-  it('reports the outstanding balance when it is below the minimum', async () => {
+  it('reports the unpaid deposit after a partial payment', async () => {
+    await allowPlan(variantA, { minimum: 100 });
     const order = await arrangeArrangingPayment(shopClient);
-    const minimumPayment = order.totalWithTax - 100;
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment,
-        deadline: '2026-11-12T15:00:00.000Z',
-      },
-    });
+    await shopClient.query(Start, { input: {} });
+    paymentControl.deduct = order.totalWithTax - 40;
+    await shopClient.query(
+      gqlTag`
+        mutation Pay($input: PaymentInput!) {
+          addPaymentToOrder(input: $input) {
+            ... on Order { id }
+            ... on ErrorResult { errorCode message }
+          }
+        }
+      `,
+      { input: { method: 'test-payment', metadata: {} } }
+    );
+    const loaded = await shopClient.query(ActivePlan);
+    expect(loaded.activeOrder.lipaMdogoPlan.outstanding).toBe(
+      order.totalWithTax - 40
+    );
+    expect(loaded.activeOrder.lipaMdogoPlan.minimumDue).toBe(60);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('drops the amount due to 1 after the deposit is covered', async () => {
+    await allowPlan(variantA, { minimum: 100 });
+    await arrangeArrangingPayment(shopClient);
+    await shopClient.query(Start, { input: {} });
     paymentControl.deduct = 50;
     await shopClient.query(
       gqlTag`
@@ -453,21 +447,14 @@ describe('Lipa mdogo plugin', () => {
     );
     const loaded = await shopClient.query(ActivePlan);
     expect(loaded.activeOrder.lipaMdogoPlan.outstanding).toBe(50);
-    expect(loaded.activeOrder.lipaMdogoPlan.minimumDue).toBe(50);
-    expect(loaded.activeOrder.lipaMdogoPlan.minimumPayment).toBe(
-      minimumPayment
-    );
+    expect(loaded.activeOrder.lipaMdogoPlan.minimumDue).toBe(1);
     await cancelActiveOrder(shopClient);
   });
 
   it('publishes the seven-day reminder once', async () => {
     await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-11-12T15:00:00.000Z',
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-11-12T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
     const events: LipaMdogoReminderEvent[] = [];
     const sub = server.app
       .get(EventBus)
@@ -485,12 +472,8 @@ describe('Lipa mdogo plugin', () => {
 
   it('does not publish an offset that was already due when the plan started', async () => {
     await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-10-15T15:00:00.000Z',
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-10-15T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
     const events: LipaMdogoReminderEvent[] = [];
     const sub = server.app
       .get(EventBus)
@@ -504,13 +487,8 @@ describe('Lipa mdogo plugin', () => {
 
   it('publishes nothing when the start call passes an empty reminder list', async () => {
     await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-11-12T15:00:00.000Z',
-        reminderDaysBefore: [],
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-11-12T15:00:00.000Z' });
+    await shopClient.query(Start, { input: { reminderDaysBefore: [] } });
     const events: LipaMdogoReminderEvent[] = [];
     const sub = server.app
       .get(EventBus)
@@ -525,12 +503,8 @@ describe('Lipa mdogo plugin', () => {
 
   it('completes the plan when settled payments cover the order', async () => {
     const order = await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-10-14T15:00:00.000Z',
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-10-14T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
     await adminClient.query(
       gqlTag`
         mutation Pay($input: ManualPaymentInput!) {
@@ -574,12 +548,8 @@ describe('Lipa mdogo plugin', () => {
 
   it('refunds settled payments and cancels the order when the deadline has passed', async () => {
     const order = await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-10-20T15:00:00.000Z',
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-10-20T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
     paymentControl.deduct = order.totalWithTax - 100;
     await shopClient.query(
       gqlTag`
@@ -621,12 +591,8 @@ describe('Lipa mdogo plugin', () => {
 
   it('leaves the plan active when the refund fails, then finishes on the next run', async () => {
     const order = await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-10-20T15:00:00.000Z',
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-10-20T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
     paymentControl.deduct = order.totalWithTax - 100;
     await shopClient.query(
       gqlTag`
@@ -668,12 +634,8 @@ describe('Lipa mdogo plugin', () => {
 
   it('marks a cancelled order missed without a missed event', async () => {
     const order = await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-11-12T15:00:00.000Z',
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-11-12T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
     await cancelActiveOrder(shopClient);
     const events: LipaMdogoPlanMissedEvent[] = [];
     const sub = server.app
@@ -696,12 +658,8 @@ describe('Lipa mdogo plugin', () => {
 
   it('leaves the plan active when the order cannot be loaded', async () => {
     const order = await arrangeArrangingPayment(shopClient);
-    await shopClient.query(Start, {
-      input: {
-        minimumPayment: 100,
-        deadline: '2026-10-20T15:00:00.000Z',
-      },
-    });
+    await allowPlan(variantA, { deadline: '2026-10-20T15:00:00.000Z' });
+    await shopClient.query(Start, { input: {} });
     const orderService = server.app.get(OrderService);
     const findOne = orderService.findOne.bind(orderService);
     orderService.findOne = async () => undefined;

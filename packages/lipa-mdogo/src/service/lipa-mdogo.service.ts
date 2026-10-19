@@ -77,13 +77,14 @@ export class LipaMdogoService {
       throw new UserInputError('No customer found for active order');
     }
     const lines = order.lines ?? [];
-    const variantIds = new Set(lines.map((line) => line.productVariantId));
-    if (lines.length === 0 || variantIds.size !== 1) {
+    const line = lines[0];
+    const variantIds = new Set(lines.map((entry) => entry.productVariantId));
+    if (line == null || variantIds.size !== 1) {
       throw new UserInputError(
         'Lipa mdogo requires every line to be the same variant.'
       );
     }
-    const variant = lines[0].productVariant;
+    const variant = line.productVariant;
     const quantity = lines.reduce((sum, line) => sum + line.quantity, 0);
     const minimum = variant.customFields.lipaMdogoMinimum;
     const rawDeadline = variant.customFields.lipaMdogoDeadline;

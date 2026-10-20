@@ -55,6 +55,21 @@ export class MpesaSettleRejection extends Error {
   }
 }
 
+export type MpesaStreamAccess =
+  | { kind: 'forbidden' }
+  | { kind: 'pending' }
+  | { kind: 'terminal'; update: MpesaPaymentStatusUpdate };
+
+function ownedByActiveUser(
+  order: Order,
+  activeUserId: RequestContext['activeUserId']
+): boolean {
+  const userId = order.customer?.user?.id;
+  return (
+    activeUserId != null && userId != null && String(userId) === String(activeUserId)
+  );
+}
+
 function outstandingBalance(order: Order): number {
   const covered = (order.payments ?? [])
     .filter((payment) => payment.state === 'Settled')
@@ -322,6 +337,40 @@ export class MpesaService {
       transactionId,
       message: 'Payment is still pending',
     };
+  }
+
+  async streamAccess(
+    ctx: RequestContext,
+    transactionId: string
+  ): Promise<MpesaStreamAccess> {
+    const payment = await this.connection.getRepository(ctx, Payment).findOne({
+      where: { transactionId },
+      relations: ['order', 'order.customer', 'order.customer.user'],
+    });
+    if (payment) {
+      if (!ownedByActiveUser(payment.order, ctx.activeUserId)) {
+        return { kind: 'forbidden' };
+      }
+      return {
+        kind: 'terminal',
+        update: {
+          transactionId,
+          status: 'SUCCESS',
+          message: MPESA_PAYMENT_SUCCESS_MESSAGE,
+        },
+      };
+    }
+
+    const order = await this.connection.getRepository(ctx, Order).findOne({
+      where: {
+        customFields: { mpesaCheckoutRequestID: transactionId },
+      },
+      relations: ['customer', 'customer.user'],
+    });
+    if (!order || !ownedByActiveUser(order, ctx.activeUserId)) {
+      return { kind: 'forbidden' };
+    }
+    return { kind: 'pending' };
   }
 
   async handleStkPushCallback(

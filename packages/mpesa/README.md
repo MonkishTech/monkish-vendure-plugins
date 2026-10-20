@@ -39,7 +39,7 @@ The active order needs a customer and must be in `ArrangingPayment`.
 
 1. Call `initiateMpesaTransaction` with the customer's phone number.
 2. The customer confirms the STK prompt.
-3. Poll `verifyMpesaTransaction` with the returned `transactionId` until `status` is `SUCCESS` or `FAILED`.
+3. Either open `GET /mpesa/transactions/<transactionId>/events` or poll `verifyMpesaTransaction` until `status` is `SUCCESS` or `FAILED`. A client may do both. The stream is the push path. Polling remains valid on its own and is the fallback when the stream drops or closes with no event.
 
 The callback records the payment. A second callback for the same checkout request id does not add another payment.
 
@@ -102,6 +102,40 @@ Callback status codes:
 | 403 | The caller IP is not on the allowlist. |
 | 200 | The payment is recorded, already recorded, the STK push failed, or settlement is rejected. |
 | 500 | A successful callback's order cannot be loaded, or the database cannot be reached. Safaricom should retry. |
+
+## Payment status stream
+
+`GET /mpesa/transactions/<transactionId>/events` is a server-sent event stream. Send the shop session cookie (`EventSource` with credentials from another origin) or the same bearer token the shop API accepts.
+
+The event name is `mpesa-payment`. The data is the terminal `verifyMpesaTransaction` payload (`SUCCESS` or `FAILED`). The stream then closes. `PENDING` is not sent. If the payment is already recorded when the stream opens, the server sends `SUCCESS` immediately.
+
+A stream opened after a failed callback cleared the checkout id responds `403`. Call `verifyMpesaTransaction` for that `FAILED` result. `401` means there is no shop session. `403` means this session does not own the checkout. `503` means the status bus could not subscribe.
+
+The server sends a `: ping` comment every 15 seconds. It closes the stream with no event after `paymentStatusStreamTimeoutMs` (default 120000).
+
+One Vendure process can use the default in-memory bus. More than one process needs Redis pub/sub. Pass the same connection settings used by `BullMQJobQueuePlugin`. The plugin does not use the job queue for this.
+
+```ts
+import { VendureConfig } from '@vendure/core';
+import { BullMQJobQueuePlugin } from '@vendure/job-queue-plugin/package/bullmq';
+import {
+  MpesaPlugin,
+  RedisMpesaPaymentStatusBus,
+} from '@monkish/vendure-mpesa-plugin';
+
+const connection = { host: 'redis', port: 6379 };
+
+export const config: VendureConfig = {
+  plugins: [
+    BullMQJobQueuePlugin.init({ connection }),
+    MpesaPlugin.init({
+      paymentStatusBus: new RedisMpesaPaymentStatusBus({ connection }),
+    }),
+  ],
+};
+```
+
+Install the optional peer when you use that adapter: `yarn add ioredis`.
 
 ## Refunds
 

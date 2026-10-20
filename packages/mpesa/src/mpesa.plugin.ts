@@ -2,6 +2,7 @@ import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 
 import { shopApiExtensions } from './api/api-extensions';
 import { MpesaShopResolver } from './api/mpesa-shop.resolver';
+import { PaymentStatusEventsController } from './api/payment-status-events.controller';
 import { ReversalCallbackController } from './api/reversal-callback.controller';
 import { StkPushCallbackController } from './api/stk-push-callback.controller';
 import { configuration } from './config/runtime-config';
@@ -46,7 +47,11 @@ export interface MpesaPluginOptions {
  */
 @VendurePlugin({
   imports: [PluginCommonModule],
-  controllers: [StkPushCallbackController, ReversalCallbackController],
+  controllers: [
+    StkPushCallbackController,
+    ReversalCallbackController,
+    PaymentStatusEventsController,
+  ],
   compatibility: '>=3.4.1',
   shopApiExtensions: {
     schema: shopApiExtensions,

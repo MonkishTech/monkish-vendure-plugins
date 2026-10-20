@@ -26,3 +26,18 @@ export const MPESA_STK_PUSH_CALLBACK_IP_ALLOWLIST: readonly string[] = [
   '196.201.212.74',
   '196.201.212.69',
 ];
+
+export const MPESA_PAYMENT_STATUS_BUS = 'MPESA_PAYMENT_STATUS_BUS';
+
+export const MPESA_PAYMENT_STATUS_CHANNEL = 'mpesa:payment-status';
+
+export const MPESA_PAYMENT_SUCCESS_MESSAGE =
+  'Payment has been successfully completed';
+
+export const MPESA_PAYMENT_FAILED_MESSAGE = 'Payment has failed';
+
+export const MPESA_PAYMENT_EVENT_NAME = 'mpesa-payment';
+
+export const MPESA_PAYMENT_STATUS_HEARTBEAT_MS = 15_000;
+
+export const DEFAULT_PAYMENT_STATUS_STREAM_TIMEOUT_MS = 120_000;

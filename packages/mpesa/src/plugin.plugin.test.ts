@@ -14,6 +14,7 @@ import {
   SimpleGraphQLClient,
   SqljsInitializer,
 } from '@vendure/testing';
+import { vi } from 'vitest';
 import { MpesaPlugin } from './mpesa.plugin';
 import {
   initialData,
@@ -23,7 +24,12 @@ import {
   updateChannel,
   getActiveChannel,
 } from '~utils';
-import { SANDBOX_BASE_URL, STK_PUSH_CALLBACK_ENDPOINT } from './constants';
+import {
+  MPESA_PAYMENT_STATUS_BUS,
+  SANDBOX_BASE_URL,
+  STK_PUSH_CALLBACK_ENDPOINT,
+} from './constants';
+import { MpesaPaymentStatusBus } from './payment-status/mpesa-payment-status-bus';
 
 const API_PORT = 3050;
 const TEST_DB_DIR = path.join(__dirname, '../__test_db__');
@@ -927,5 +933,389 @@ describe('Mpesa Plugin', () => {
       { id: order.id }
     );
     expect(after.order.payments[0].refunds[0].state).toBe('Settled');
+  });
+
+  it('publishes SUCCESS after the callback records the payment', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_ok');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const seen: string[] = [];
+    const stop = await bus.subscribe('ws_CO_sse_ok', (update) => {
+      seen.push(update.status);
+    });
+    mockStkQuery('ws_CO_sse_ok');
+    const response = await postCallback(
+      successCallback('ws_CO_sse_ok', chargeAmount / 100, 'RCPSSE')
+    );
+    stop();
+    expect(response.status).toBeLessThan(500);
+    expect(seen).toEqual(['SUCCESS']);
+  });
+
+  it('publishes FAILED when the callback clears the checkout request', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    captureStk('ws_CO_sse_fail');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const seen: string[] = [];
+    const stop = await bus.subscribe('ws_CO_sse_fail', (update) => {
+      seen.push(`${update.status}:${update.message}`);
+    });
+    const response = await postCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: 'ws_CO_sse_fail',
+          ResultCode: 1032,
+          ResultDesc: 'Cancelled by user',
+        },
+      },
+    });
+    stop();
+    expect(response.status).toBe(200);
+    expect(seen).toEqual(['FAILED:Payment has failed']);
+    const stored = await readMpesaFields(order.id);
+    expect(stored.mpesaCheckoutRequestID).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('does not publish when the callback is delivered twice', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_once');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    mockStkQuery('ws_CO_sse_once');
+    await postCallback(
+      successCallback('ws_CO_sse_once', chargeAmount / 100, 'RCPONCE2')
+    );
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const seen: string[] = [];
+    const stop = await bus.subscribe('ws_CO_sse_once', (update) => {
+      seen.push(update.status);
+    });
+    mockStkQuery('ws_CO_sse_once');
+    const second = await postCallback(
+      successCallback('ws_CO_sse_once', chargeAmount / 100, 'RCPONCE2')
+    );
+    stop();
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([]);
+  });
+
+  it('returns 200 when publish throws after the payment is saved', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_throw');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const publish = bus.publish.bind(bus);
+    vi.spyOn(bus, 'publish').mockImplementation(async (update) => {
+      if (update.transactionId === 'ws_CO_sse_throw') {
+        throw new Error('bus down');
+      }
+      return publish(update);
+    });
+    mockStkQuery('ws_CO_sse_throw');
+    const response = await postCallback(
+      successCallback('ws_CO_sse_throw', chargeAmount / 100, 'RCPTHROW')
+    );
+    vi.mocked(bus.publish).mockRestore();
+    expect(response.status).toBe(200);
+    const verified = await shopClient.query(Verify, {
+      transactionId: 'ws_CO_sse_throw',
+    });
+    expect(verified.verifyMpesaTransaction.status).toBe('SUCCESS');
+  });
+
+  const EVENTS = (transactionId: string) =>
+    `http://localhost:${API_PORT}/mpesa/transactions/${transactionId}/events`;
+
+  function parseMpesaEvents(
+    body: string
+  ): { status: string; transactionId: string; message: string }[] {
+    return body
+      .split('\n\n')
+      .filter((block) => block.includes('event: mpesa-payment'))
+      .map((block) => {
+        const line = block
+          .split('\n')
+          .find((entry) => entry.startsWith('data: '));
+        return JSON.parse(line?.slice('data: '.length) ?? '{}') as {
+          status: string;
+          transactionId: string;
+          message: string;
+        };
+      });
+  }
+
+  async function readBody(response: Response, stop: AbortSignal): Promise<string> {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return '';
+    }
+    const chunks: Uint8Array[] = [];
+    const onAbort = () => {
+      void reader.cancel();
+    };
+    stop.addEventListener('abort', onAbort);
+    try {
+      while (!stop.aborted) {
+        const next = await reader.read();
+        if (next.done) {
+          break;
+        }
+        chunks.push(next.value);
+      }
+    } catch {
+      // The abort cancels the reader.
+    } finally {
+      stop.removeEventListener('abort', onAbort);
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
+
+  async function openEvents(transactionId: string, headers?: HeadersInit) {
+    const controller = new AbortController();
+    const response = await fetch(EVENTS(transactionId), {
+      headers: {
+        Accept: 'text/event-stream',
+        ...(headers ?? {}),
+      },
+      signal: controller.signal,
+    });
+    return { response, controller };
+  }
+
+  it('streams SUCCESS when the payment is already recorded', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await adminClient.query(
+      gqlTag`
+        mutation AddManualPayment($input: ManualPaymentInput!) {
+          addManualPaymentToOrder(input: $input) {
+            ... on Order { id }
+            ... on ErrorResult { errorCode message }
+          }
+        }
+      `,
+      {
+        input: {
+          orderId: order.id,
+          method: 'mpesa',
+          transactionId: 'ws_CO_sse_paid',
+          metadata: {
+            CheckoutRequestID: 'ws_CO_sse_paid',
+            MpesaReceiptNumber: 'ws_CO_sse_paid',
+          },
+        },
+      }
+    );
+    const { response, controller } = await openEvents('ws_CO_sse_paid', {
+      Authorization: `Bearer ${shopClient.getAuthToken()}`,
+    });
+    const timeout = AbortSignal.timeout(5000);
+    const body = await readBody(response, timeout);
+    controller.abort();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    expect(parseMpesaEvents(body)).toEqual([
+      {
+        status: 'SUCCESS',
+        transactionId: 'ws_CO_sse_paid',
+        message: 'Payment has been successfully completed',
+      },
+    ]);
+  });
+
+  it('does not send an event while the checkout is still pending', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_sse_wait');
+    const { response, controller } = await openEvents('ws_CO_sse_wait', {
+      Authorization: `Bearer ${shopClient.getAuthToken()}`,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    controller.abort();
+    const body = await readBody(response, AbortSignal.abort());
+    expect(response.status).toBe(200);
+    expect(parseMpesaEvents(body)).toEqual([]);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('streams SUCCESS when the callback arrives after the stream opens', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_live');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const { response, controller } = await openEvents('ws_CO_sse_live', {
+      Authorization: `Bearer ${shopClient.getAuthToken()}`,
+    });
+    mockStkQuery('ws_CO_sse_live');
+    await postCallback(
+      successCallback('ws_CO_sse_live', chargeAmount / 100, 'RCPLIVE')
+    );
+    const timeout = AbortSignal.timeout(5000);
+    const body = await readBody(response, timeout);
+    controller.abort();
+    expect(parseMpesaEvents(body)).toEqual([
+      {
+        status: 'SUCCESS',
+        transactionId: 'ws_CO_sse_live',
+        message: 'Payment has been successfully completed',
+      },
+    ]);
+  });
+
+  it('streams FAILED when the callback fails after the stream opens', async () => {
+    await arrangeArrangingPayment(shopClient);
+    captureStk('ws_CO_sse_live_fail');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const { response, controller } = await openEvents('ws_CO_sse_live_fail', {
+      Authorization: `Bearer ${shopClient.getAuthToken()}`,
+    });
+    await postCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: 'ws_CO_sse_live_fail',
+          ResultCode: 1032,
+          ResultDesc: 'Cancelled by user',
+        },
+      },
+    });
+    const timeout = AbortSignal.timeout(5000);
+    const body = await readBody(response, timeout);
+    controller.abort();
+    expect(parseMpesaEvents(body)).toEqual([
+      {
+        status: 'FAILED',
+        transactionId: 'ws_CO_sse_live_fail',
+        message: 'Payment has failed',
+      },
+    ]);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('sends one event when the callback is delivered twice while the stream is open', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_dup');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const { response, controller } = await openEvents('ws_CO_sse_dup', {
+      Authorization: `Bearer ${shopClient.getAuthToken()}`,
+    });
+    mockStkQuery('ws_CO_sse_dup');
+    await postCallback(
+      successCallback('ws_CO_sse_dup', chargeAmount / 100, 'RCPDUP')
+    );
+    mockStkQuery('ws_CO_sse_dup');
+    await postCallback(
+      successCallback('ws_CO_sse_dup', chargeAmount / 100, 'RCPDUP')
+    );
+    const timeout = AbortSignal.timeout(5000);
+    const body = await readBody(response, timeout);
+    controller.abort();
+    expect(parseMpesaEvents(body)).toHaveLength(1);
+  });
+
+  it('answers 401 when the events request has no session', async () => {
+    const response = await fetch(EVENTS('ws_CO_sse_anon'));
+    expect(response.status).toBe(401);
+  });
+
+  it('answers 403 when another customer opens the stream', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_sse_other');
+    const customers = await getCustomerList(adminClient, { take: 2 });
+    const other = customers.customers.items[1];
+    await shopClient.asUserWithCredentials(other.emailAddress, 'test');
+    const response = await fetch(EVENTS('ws_CO_sse_other'), {
+      headers: { Authorization: `Bearer ${shopClient.getAuthToken()}` },
+    });
+    expect(response.status).toBe(403);
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('answers 403 for a new stream after a failed callback clears the checkout id', async () => {
+    await arrangeArrangingPayment(shopClient);
+    captureStk('ws_CO_sse_late_fail');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    await postCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: 'ws_CO_sse_late_fail',
+          ResultCode: 1032,
+          ResultDesc: 'Cancelled by user',
+        },
+      },
+    });
+    const response = await fetch(EVENTS('ws_CO_sse_late_fail'), {
+      headers: { Authorization: `Bearer ${shopClient.getAuthToken()}` },
+    });
+    expect(response.status).toBe(403);
+    const verified = await shopClient.query(Verify, {
+      transactionId: 'ws_CO_sse_late_fail',
+    });
+    expect(verified.verifyMpesaTransaction.status).toBe('FAILED');
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('unsubscribes when the client aborts', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_sse_abort');
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    let stopped = false;
+    const subscribe = bus.subscribe.bind(bus);
+    vi.spyOn(bus, 'subscribe').mockImplementation(async (transactionId, onUpdate) => {
+      const stop = await subscribe(transactionId, onUpdate);
+      return () => {
+        stopped = true;
+        stop();
+      };
+    });
+    const { response, controller } = await openEvents('ws_CO_sse_abort', {
+      Authorization: `Bearer ${shopClient.getAuthToken()}`,
+    });
+    expect(response.status).toBe(200);
+    controller.abort();
+    await vi.waitFor(() => {
+      expect(stopped).toBe(true);
+    });
+    vi.mocked(bus.subscribe).mockRestore();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('answers 503 when the bus cannot subscribe', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_sse_down');
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    vi.spyOn(bus, 'subscribe').mockRejectedValue(new Error('redis down'));
+    const response = await fetch(EVENTS('ws_CO_sse_down'), {
+      headers: { Authorization: `Bearer ${shopClient.getAuthToken()}` },
+    });
+    vi.mocked(bus.subscribe).mockRestore();
+    expect(response.status).toBe(503);
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('closes with no event when the stream timeout elapses', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    await setCheckoutRequestId(order.id, 'ws_CO_sse_timeout');
+    const previous = MpesaPlugin.options;
+    MpesaPlugin.options = {
+      ...previous,
+      paymentStatusStreamTimeoutMs: 30,
+    };
+    const { response, controller } = await openEvents('ws_CO_sse_timeout', {
+      Authorization: `Bearer ${shopClient.getAuthToken()}`,
+    });
+    const body = await readBody(response, AbortSignal.timeout(5000));
+    controller.abort();
+    MpesaPlugin.options = previous;
+    expect(response.status).toBe(200);
+    expect(parseMpesaEvents(body)).toEqual([]);
+    await cancelActiveOrder(shopClient);
   });
 });

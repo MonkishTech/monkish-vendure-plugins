@@ -4837,6 +4837,11 @@ __metadata:
   dependencies:
     axios: "npm:^1.7.9"
     libphonenumber-js: "npm:^1.10.54"
+  peerDependencies:
+    ioredis: ^5.4.1
+  peerDependenciesMeta:
+    ioredis:
+      optional: true
   languageName: unknown
   linkType: soft
 

@@ -10,6 +10,14 @@
     "axios": "^1.7.9",
     "libphonenumber-js": "^1.10.54"
   },
+  "peerDependencies": {
+    "ioredis": "^5.4.1"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
   "type": "commonjs",
   "main": "./dist/index.js",
   "typings": "./dist/index.d.ts",

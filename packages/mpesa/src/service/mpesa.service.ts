@@ -1,6 +1,6 @@
 import crypto, { X509Certificate } from 'crypto';
 
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   ActiveOrderService,
   CreateRefundResult,
@@ -20,8 +20,15 @@ import {
 import axios, { AxiosInstance } from 'axios';
 
 import { mpesaPaymentMethodHandler } from '../config/mpesa.handler';
+import type {
+  MpesaPaymentStatusBus,
+  MpesaPaymentStatusUpdate,
+} from '../payment-status/mpesa-payment-status-bus';
 import {
   LIVE_BASE_URL,
+  MPESA_PAYMENT_FAILED_MESSAGE,
+  MPESA_PAYMENT_STATUS_BUS,
+  MPESA_PAYMENT_SUCCESS_MESSAGE,
   REVERSAL_CALLBACK_ENDPOINT,
   SANDBOX_BASE_URL,
   STK_PUSH_CALLBACK_ENDPOINT,
@@ -46,6 +53,21 @@ export class MpesaSettleRejection extends Error {
     super(message);
     this.name = 'MpesaSettleRejection';
   }
+}
+
+export type MpesaStreamAccess =
+  | { kind: 'forbidden' }
+  | { kind: 'pending' }
+  | { kind: 'terminal'; update: MpesaPaymentStatusUpdate };
+
+function ownedByActiveUser(
+  order: Order,
+  activeUserId: RequestContext['activeUserId']
+): boolean {
+  const userId = order.customer?.user?.id;
+  return (
+    activeUserId != null && userId != null && String(userId) === String(activeUserId)
+  );
 }
 
 function outstandingBalance(order: Order): number {
@@ -109,7 +131,9 @@ export class MpesaService {
     private activeOrderService: ActiveOrderService,
     private connection: TransactionalConnection,
     private orderService: OrderService,
-    private paymentService: PaymentService
+    private paymentService: PaymentService,
+    @Inject(MPESA_PAYMENT_STATUS_BUS)
+    private paymentStatusBus: MpesaPaymentStatusBus
   ) {}
 
   async initiateStkPush(
@@ -288,7 +312,7 @@ export class MpesaService {
       return {
         status: 'SUCCESS',
         transactionId,
-        message: 'Payment has been successfully completed',
+        message: MPESA_PAYMENT_SUCCESS_MESSAGE,
       };
     }
 
@@ -304,7 +328,7 @@ export class MpesaService {
       return {
         status: 'FAILED',
         transactionId,
-        message: 'Payment has failed',
+        message: MPESA_PAYMENT_FAILED_MESSAGE,
       };
     }
 
@@ -313,6 +337,40 @@ export class MpesaService {
       transactionId,
       message: 'Payment is still pending',
     };
+  }
+
+  async streamAccess(
+    ctx: RequestContext,
+    transactionId: string
+  ): Promise<MpesaStreamAccess> {
+    const payment = await this.connection.getRepository(ctx, Payment).findOne({
+      where: { transactionId },
+      relations: ['order', 'order.customer', 'order.customer.user'],
+    });
+    if (payment) {
+      if (!ownedByActiveUser(payment.order, ctx.activeUserId)) {
+        return { kind: 'forbidden' };
+      }
+      return {
+        kind: 'terminal',
+        update: {
+          transactionId,
+          status: 'SUCCESS',
+          message: MPESA_PAYMENT_SUCCESS_MESSAGE,
+        },
+      };
+    }
+
+    const order = await this.connection.getRepository(ctx, Order).findOne({
+      where: {
+        customFields: { mpesaCheckoutRequestID: transactionId },
+      },
+      relations: ['customer', 'customer.user'],
+    });
+    if (!order || !ownedByActiveUser(order, ctx.activeUserId)) {
+      return { kind: 'forbidden' };
+    }
+    return { kind: 'pending' };
   }
 
   async handleStkPushCallback(
@@ -359,6 +417,11 @@ export class MpesaService {
         mpesaChargeAmount: null,
         mpesaSettlementAmount: null,
       });
+      await this.publishPaymentStatus({
+        transactionId: CheckoutRequestID,
+        status: 'FAILED',
+        message: MPESA_PAYMENT_FAILED_MESSAGE,
+      });
       return;
     }
 
@@ -379,6 +442,12 @@ export class MpesaService {
       await this.settleSuccessfulCallback(txCtx, order, payload);
     });
 
+    await this.publishPaymentStatus({
+      transactionId: CheckoutRequestID,
+      status: 'SUCCESS',
+      message: MPESA_PAYMENT_SUCCESS_MESSAGE,
+    });
+
     const config = await this.getMpesaConfig(ctx);
     const queryResult = await this.checkTransactionStatus(
       config,
@@ -391,6 +460,22 @@ export class MpesaService {
           message: queryResult.message,
         }),
         loggerCtx
+      );
+    }
+  }
+
+  private async publishPaymentStatus(
+    update: MpesaPaymentStatusUpdate
+  ): Promise<void> {
+    try {
+      await this.paymentStatusBus.publish(update);
+    } catch (error) {
+      Logger.error(
+        buildLogMessage('M-Pesa payment status publish failed', {
+          checkoutRequestId: update.transactionId,
+        }),
+        loggerCtx,
+        error instanceof Error ? error.stack : undefined
       );
     }
   }

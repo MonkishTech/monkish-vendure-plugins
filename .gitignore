@@ -55,5 +55,6 @@ vitest.config.*.timestamp*
 __test_db__
 
 docs/superpowers/
+.worktrees
 .vendure/
 .cursor/*.log

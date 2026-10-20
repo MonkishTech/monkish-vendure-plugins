@@ -1,5 +1,12 @@
 # @monkish/vendure-lipa-mdogo-plugin
 
+## 0.0.3
+
+### Patch Changes
+
+- 2a38300: Store lipa mdogo plan deadlines as `Date` so the plugin can boot on Postgres.
+  Give the lipa mdogo variant fields English titles in the admin product editor.
+
 ## 0.0.2
 
 ### Patch Changes

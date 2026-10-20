@@ -1167,7 +1167,7 @@ describe('Mpesa Plugin', () => {
   });
 
   it('streams FAILED when the callback fails after the stream opens', async () => {
-    const order = await arrangeArrangingPayment(shopClient);
+    await arrangeArrangingPayment(shopClient);
     captureStk('ws_CO_sse_live_fail');
     await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
     const { response, controller } = await openEvents('ws_CO_sse_live_fail', {
@@ -1238,7 +1238,7 @@ describe('Mpesa Plugin', () => {
   });
 
   it('answers 403 for a new stream after a failed callback clears the checkout id', async () => {
-    const order = await arrangeArrangingPayment(shopClient);
+    await arrangeArrangingPayment(shopClient);
     captureStk('ws_CO_sse_late_fail');
     await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
     await postCallback({

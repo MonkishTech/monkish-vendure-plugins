@@ -133,8 +133,7 @@ function loadIoRedis(): new (
   connection: MpesaRedisConnection
 ) => MpesaRedisClient {
   try {
-    // Optional peer. The main plugin entry does not load this module's connection path.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    // Optional peer. Loaded only when the adapter is constructed with a connection.
     return require('ioredis');
   } catch (error) {
     throw new Error(

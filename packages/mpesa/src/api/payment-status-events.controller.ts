@@ -18,7 +18,7 @@ import {
   loggerCtx,
 } from '../constants';
 import { MpesaPlugin } from '../mpesa.plugin';
-import {
+import type {
   MpesaPaymentStatusBus,
   MpesaPaymentStatusUpdate,
 } from '../payment-status/mpesa-payment-status-bus';
@@ -58,9 +58,11 @@ export class PaymentStatusEventsController {
     const cleanup = () => {
       if (heartbeat) {
         clearInterval(heartbeat);
+        heartbeat = undefined;
       }
       if (timeout) {
         clearTimeout(timeout);
+        timeout = undefined;
       }
       unsubscribe?.();
       unsubscribe = undefined;

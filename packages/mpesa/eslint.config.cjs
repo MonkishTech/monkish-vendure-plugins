@@ -24,6 +24,7 @@ module.exports = [
             'vite-tsconfig-paths',
             'unplugin-swc',
             'vitest',
+            'ioredis',
           ],
           ignoredFiles: [
             '{projectRoot}/eslint.config.{js,cjs,mjs}',

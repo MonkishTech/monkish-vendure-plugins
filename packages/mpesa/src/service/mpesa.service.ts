@@ -20,7 +20,7 @@ import {
 import axios, { AxiosInstance } from 'axios';
 
 import { mpesaPaymentMethodHandler } from '../config/mpesa.handler';
-import {
+import type {
   MpesaPaymentStatusBus,
   MpesaPaymentStatusUpdate,
 } from '../payment-status/mpesa-payment-status-bus';

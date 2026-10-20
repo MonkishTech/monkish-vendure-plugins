@@ -5,15 +5,20 @@ import { MpesaShopResolver } from './api/mpesa-shop.resolver';
 import { ReversalCallbackController } from './api/reversal-callback.controller';
 import { StkPushCallbackController } from './api/stk-push-callback.controller';
 import { configuration } from './config/runtime-config';
-import { MpesaService } from './service/mpesa.service';
 import {
+  MPESA_PAYMENT_STATUS_BUS,
   MPESA_STK_PUSH_CALLBACK_IP_ALLOWLIST,
   STK_PUSH_CALLBACK_ALLOWLIST,
 } from './constants';
+import { InMemoryMpesaPaymentStatusBus } from './payment-status/in-memory-mpesa-payment-status-bus';
+import { MpesaPaymentStatusBus } from './payment-status/mpesa-payment-status-bus';
+import { MpesaService } from './service/mpesa.service';
 
 export interface MpesaPluginOptions {
   /** Extra IPs to allow for STK push callback (e.g. 127.0.0.1, ::1 for local/testing). */
   stkPushCallbackAdditionalIps?: string[];
+  paymentStatusBus?: MpesaPaymentStatusBus;
+  paymentStatusStreamTimeoutMs?: number;
 }
 
 /**
@@ -55,6 +60,12 @@ export interface MpesaPluginOptions {
         ...MPESA_STK_PUSH_CALLBACK_IP_ALLOWLIST,
         ...(MpesaPlugin.options?.stkPushCallbackAdditionalIps ?? []),
       ],
+    },
+    {
+      provide: MPESA_PAYMENT_STATUS_BUS,
+      useFactory: (): MpesaPaymentStatusBus =>
+        MpesaPlugin.options?.paymentStatusBus ??
+        new InMemoryMpesaPaymentStatusBus(),
     },
   ],
   configuration,

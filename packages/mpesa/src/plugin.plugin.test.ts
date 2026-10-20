@@ -14,6 +14,7 @@ import {
   SimpleGraphQLClient,
   SqljsInitializer,
 } from '@vendure/testing';
+import { vi } from 'vitest';
 import { MpesaPlugin } from './mpesa.plugin';
 import {
   initialData,
@@ -23,7 +24,12 @@ import {
   updateChannel,
   getActiveChannel,
 } from '~utils';
-import { SANDBOX_BASE_URL, STK_PUSH_CALLBACK_ENDPOINT } from './constants';
+import {
+  MPESA_PAYMENT_STATUS_BUS,
+  SANDBOX_BASE_URL,
+  STK_PUSH_CALLBACK_ENDPOINT,
+} from './constants';
+import { MpesaPaymentStatusBus } from './payment-status/mpesa-payment-status-bus';
 
 const API_PORT = 3050;
 const TEST_DB_DIR = path.join(__dirname, '../__test_db__');
@@ -927,5 +933,99 @@ describe('Mpesa Plugin', () => {
       { id: order.id }
     );
     expect(after.order.payments[0].refunds[0].state).toBe('Settled');
+  });
+
+  it('publishes SUCCESS after the callback records the payment', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_ok');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const seen: string[] = [];
+    const stop = await bus.subscribe('ws_CO_sse_ok', (update) => {
+      seen.push(update.status);
+    });
+    mockStkQuery('ws_CO_sse_ok');
+    const response = await postCallback(
+      successCallback('ws_CO_sse_ok', chargeAmount / 100, 'RCPSSE')
+    );
+    stop();
+    expect(response.status).toBeLessThan(500);
+    expect(seen).toEqual(['SUCCESS']);
+  });
+
+  it('publishes FAILED when the callback clears the checkout request', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    captureStk('ws_CO_sse_fail');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const seen: string[] = [];
+    const stop = await bus.subscribe('ws_CO_sse_fail', (update) => {
+      seen.push(`${update.status}:${update.message}`);
+    });
+    const response = await postCallback({
+      Body: {
+        stkCallback: {
+          MerchantRequestID: '29115-34620561-1',
+          CheckoutRequestID: 'ws_CO_sse_fail',
+          ResultCode: 1032,
+          ResultDesc: 'Cancelled by user',
+        },
+      },
+    });
+    stop();
+    expect(response.status).toBe(200);
+    expect(seen).toEqual(['FAILED:Payment has failed']);
+    const stored = await readMpesaFields(order.id);
+    expect(stored.mpesaCheckoutRequestID).toBeNull();
+    await cancelActiveOrder(shopClient);
+  });
+
+  it('does not publish when the callback is delivered twice', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_once');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    mockStkQuery('ws_CO_sse_once');
+    await postCallback(
+      successCallback('ws_CO_sse_once', chargeAmount / 100, 'RCPONCE2')
+    );
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const seen: string[] = [];
+    const stop = await bus.subscribe('ws_CO_sse_once', (update) => {
+      seen.push(update.status);
+    });
+    mockStkQuery('ws_CO_sse_once');
+    const second = await postCallback(
+      successCallback('ws_CO_sse_once', chargeAmount / 100, 'RCPONCE2')
+    );
+    stop();
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([]);
+  });
+
+  it('returns 200 when publish throws after the payment is saved', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_throw');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const bus = server.app.get<MpesaPaymentStatusBus>(MPESA_PAYMENT_STATUS_BUS);
+    const publish = bus.publish.bind(bus);
+    vi.spyOn(bus, 'publish').mockImplementation(async (update) => {
+      if (update.transactionId === 'ws_CO_sse_throw') {
+        throw new Error('bus down');
+      }
+      return publish(update);
+    });
+    mockStkQuery('ws_CO_sse_throw');
+    const response = await postCallback(
+      successCallback('ws_CO_sse_throw', chargeAmount / 100, 'RCPTHROW')
+    );
+    vi.mocked(bus.publish).mockRestore();
+    expect(response.status).toBe(200);
+    const verified = await shopClient.query(Verify, {
+      transactionId: 'ws_CO_sse_throw',
+    });
+    expect(verified.verifyMpesaTransaction.status).toBe('SUCCESS');
   });
 });

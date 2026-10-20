@@ -19,7 +19,7 @@ export class LipaMdogoPlan extends VendureEntity {
   @Column()
   deposit!: number;
 
-  @Column({ type: 'datetime' })
+  @Column({ type: Date })
   deadline!: Date;
 
   @Column('simple-json')

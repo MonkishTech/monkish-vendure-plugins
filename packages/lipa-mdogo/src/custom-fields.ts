@@ -1,4 +1,4 @@
-import { RuntimeVendureConfig } from '@vendure/core';
+import { LanguageCode, RuntimeVendureConfig } from '@vendure/core';
 
 declare module '@vendure/core' {
   interface CustomProductVariantFields {
@@ -15,18 +15,21 @@ export function addLipaMdogoCustomFields(config: RuntimeVendureConfig): void {
       type: 'boolean',
       defaultValue: false,
       public: true,
+      label: [{ languageCode: LanguageCode.en, value: 'Lipa mdogo enabled' }],
     },
     {
       name: 'lipaMdogoMinimum',
       type: 'int',
       defaultValue: 0,
       public: true,
+      label: [{ languageCode: LanguageCode.en, value: 'Lipa mdogo deposit' }],
     },
     {
       name: 'lipaMdogoDeadline',
       type: 'datetime',
       nullable: true,
       public: true,
+      label: [{ languageCode: LanguageCode.en, value: 'Lipa mdogo deadline' }],
     }
   );
 }

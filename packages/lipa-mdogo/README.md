@@ -39,11 +39,11 @@ plugins: [
 
 The plugin adds three public custom fields to each product variant. Set them in the admin product editor. A variant accepts a plan only when `lipaMdogoEnabled` is true. Existing variants default to off.
 
-| Field | Meaning |
-| --- | --- |
-| `lipaMdogoEnabled` | Boolean. Default `false`. |
-| `lipaMdogoMinimum` | Deposit for one unit, in minor units. Default `0`. The order deposit is this value times the quantity. |
-| `lipaMdogoDeadline` | Datetime. A plan cannot start once this moment has passed. The plan stores this value as its deadline. |
+| Field | Admin title | Meaning |
+| --- | --- | --- |
+| `lipaMdogoEnabled` | Lipa mdogo enabled | Boolean. Default `false`. |
+| `lipaMdogoMinimum` | Lipa mdogo deposit | Deposit for one unit, in minor units. Default `0`. The order deposit is this value times the quantity. |
+| `lipaMdogoDeadline` | Lipa mdogo deadline | Datetime. A plan cannot start once this moment has passed. The plan stores this value as its deadline. |
 
 Every line in the order must be that same variant. A second variant makes `startLipaMdogoPlan` fail. Shipping and other order charges stay inside the order total and are part of the same plan. Changing these fields later does not change a plan that already exists.
 

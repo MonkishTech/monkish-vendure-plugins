@@ -60,14 +60,15 @@ export type MpesaStreamAccess =
   | { kind: 'pending' }
   | { kind: 'terminal'; update: MpesaPaymentStatusUpdate };
 
-function ownedByActiveUser(
-  order: Order,
-  activeUserId: RequestContext['activeUserId']
-): boolean {
-  const userId = order.customer?.user?.id;
-  return (
-    activeUserId != null && userId != null && String(userId) === String(activeUserId)
-  );
+function sessionOwnsOrder(order: Order, ctx: RequestContext): boolean {
+  const sessionUserId = ctx.activeUserId;
+  const customerUserId = order.customer?.user?.id;
+  // setCustomerForOrder leaves a guest customer without a user.
+  if (sessionUserId != null && customerUserId != null) {
+    return String(sessionUserId) === String(customerUserId);
+  }
+  const activeOrderId = ctx.session?.activeOrderId;
+  return activeOrderId != null && String(activeOrderId) === String(order.id);
 }
 
 function outstandingBalance(order: Order): number {
@@ -348,7 +349,7 @@ export class MpesaService {
       relations: ['order', 'order.customer', 'order.customer.user'],
     });
     if (payment) {
-      if (!ownedByActiveUser(payment.order, ctx.activeUserId)) {
+      if (!sessionOwnsOrder(payment.order, ctx)) {
         return { kind: 'forbidden' };
       }
       return {
@@ -367,7 +368,7 @@ export class MpesaService {
       },
       relations: ['customer', 'customer.user'],
     });
-    if (!order || !ownedByActiveUser(order, ctx.activeUserId)) {
+    if (!order || !sessionOwnsOrder(order, ctx)) {
       return { kind: 'forbidden' };
     }
     return { kind: 'pending' };

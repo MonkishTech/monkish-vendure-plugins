@@ -170,7 +170,7 @@ export class PaymentStatusEventsController {
     const session = await this.sessionService.getSessionFromToken(
       extracted.token
     );
-    if (!session?.user) {
+    if (!session) {
       return;
     }
     const ctx = await this.requestContextService.fromRequest(
@@ -179,7 +179,10 @@ export class PaymentStatusEventsController {
       [Permission.Owner],
       session
     );
-    if (!ctx.authorizedAsOwnerOnly || ctx.activeUserId == null) {
+    if (
+      session.user &&
+      (!ctx.authorizedAsOwnerOnly || ctx.activeUserId == null)
+    ) {
       return;
     }
     return ctx;

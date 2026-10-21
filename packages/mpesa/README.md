@@ -107,6 +107,8 @@ Callback status codes:
 
 `GET /mpesa/transactions/<transactionId>/events` is a server-sent event stream. Send the shop session cookie (`EventSource` with credentials from another origin) or the same bearer token the shop API accepts.
 
+A signed-in customer can open the stream for a checkout on their own order. An anonymous session can open it when that checkout belongs to the session's active order. `setCustomerForOrder` does not create a user, so guest checkout is authorized by the active order.
+
 The event name is `mpesa-payment`. The data is the terminal `verifyMpesaTransaction` payload (`SUCCESS` or `FAILED`). The stream then closes. `PENDING` is not sent. If the payment is already recorded when the stream opens, the server sends `SUCCESS` immediately.
 
 A stream opened after a failed callback cleared the checkout id responds `403`. Call `verifyMpesaTransaction` for that `FAILED` result. `401` means there is no shop session. `403` means this session does not own the checkout. `503` means the status bus could not subscribe.

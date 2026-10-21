@@ -196,23 +196,69 @@ describe('Mpesa Plugin', () => {
     if (!before.activeOrder) {
       await addItem(client, 1, 1);
     }
-    await client.query(gqlTag`
-      mutation {
-        setOrderShippingAddress(
-          input: {
-            fullName: "Ada Lovelace"
-            streetLine1: "1 Market Street"
-            city: "Nairobi"
-            postalCode: "00100"
-            countryCode: "KE"
-          }
-        ) {
-          ... on Order {
-            id
+    return moveActiveOrderToArrangingPayment(client, 'Ada Lovelace');
+  }
+
+  async function arrangeGuestArrangingPayment(
+    client: SimpleGraphQLClient,
+    label: string
+  ): Promise<{ id: string; code: string; totalWithTax: number }> {
+    await client.asAnonymousUser();
+    await addItem(client, 1, 1);
+    const assigned = await client.query(
+      gqlTag`
+        mutation SetCustomer($input: CreateCustomerInput!) {
+          setCustomerForOrder(input: $input) {
+            ... on Order {
+              id
+            }
+            ... on ErrorResult {
+              errorCode
+              message
+            }
           }
         }
+      `,
+      {
+        input: {
+          emailAddress: `guest-mpesa-${label}-${Date.now()}@example.com`,
+          firstName: 'Guest',
+          lastName: 'Buyer',
+        },
       }
-    `);
+    );
+    if (assigned.setCustomerForOrder.errorCode) {
+      throw new Error(
+        assigned.setCustomerForOrder.message ?? 'setCustomerForOrder failed'
+      );
+    }
+    return moveActiveOrderToArrangingPayment(client, 'Guest Buyer');
+  }
+
+  async function moveActiveOrderToArrangingPayment(
+    client: SimpleGraphQLClient,
+    fullName: string
+  ): Promise<{ id: string; code: string; totalWithTax: number }> {
+    await client.query(
+      gqlTag`
+        mutation SetAddress($fullName: String!) {
+          setOrderShippingAddress(
+            input: {
+              fullName: $fullName
+              streetLine1: "1 Market Street"
+              city: "Nairobi"
+              postalCode: "00100"
+              countryCode: "KE"
+            }
+          ) {
+            ... on Order {
+              id
+            }
+          }
+        }
+      `,
+      { fullName }
+    );
     const withMethods = await client.query(ActiveOrderForMpesa);
     const shippingMethodId = withMethods.eligibleShippingMethods[0].id;
     await client.query(
@@ -1221,6 +1267,42 @@ describe('Mpesa Plugin', () => {
   it('answers 401 when the events request has no session', async () => {
     const response = await fetch(EVENTS('ws_CO_sse_anon'));
     expect(response.status).toBe(401);
+  });
+
+  it('streams SUCCESS for the anonymous session that owns the checkout', async () => {
+    const order = await arrangeGuestArrangingPayment(shopClient, 'live');
+    const token = shopClient.getAuthToken();
+    const chargeAmount = Math.ceil(order.totalWithTax / 100) * 100;
+    captureStk('ws_CO_sse_guest');
+    await shopClient.query(Initiate, { phoneNumber: '+254700000000' });
+    const { response, controller } = await openEvents('ws_CO_sse_guest', {
+      Authorization: `Bearer ${token}`,
+    });
+    mockStkQuery('ws_CO_sse_guest');
+    await postCallback(
+      successCallback('ws_CO_sse_guest', chargeAmount / 100, 'RCPGUEST')
+    );
+    const timeout = AbortSignal.timeout(5000);
+    const body = await readBody(response, timeout);
+    controller.abort();
+    expect(parseMpesaEvents(body)).toEqual([
+      {
+        status: 'SUCCESS',
+        transactionId: 'ws_CO_sse_guest',
+        message: 'Payment has been successfully completed',
+      },
+    ]);
+  });
+
+  it('answers 403 when a different anonymous session opens the stream', async () => {
+    const order = await arrangeGuestArrangingPayment(shopClient, 'other');
+    await setCheckoutRequestId(order.id, 'ws_CO_sse_guest_other');
+    await shopClient.asAnonymousUser();
+    await shopClient.query(ActiveOrderForMpesa);
+    const response = await fetch(EVENTS('ws_CO_sse_guest_other'), {
+      headers: { Authorization: `Bearer ${shopClient.getAuthToken()}` },
+    });
+    expect(response.status).toBe(403);
   });
 
   it('answers 403 when another customer opens the stream', async () => {

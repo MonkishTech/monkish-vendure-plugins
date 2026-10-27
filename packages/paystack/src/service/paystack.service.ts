@@ -20,6 +20,7 @@ import {
   PaymentService,
   RequestContext,
   RequestContextService,
+  Refund,
   TransactionalConnection,
   UserInputError,
 } from '@vendure/core';
@@ -372,7 +373,7 @@ export class PaystackService {
       );
       return {
         state: 'Failed' as const,
-        transactionId: payment.metadata.public.transactionId,
+        transactionId: payment.transactionId,
       };
     }
     const secretKey = secretKeyFromHandler(paymentMethod.handler);
@@ -386,7 +387,7 @@ export class PaystackService {
       );
       return {
         state: 'Failed' as const,
-        transactionId: payment.metadata.public.transactionId,
+        transactionId: payment.transactionId,
       };
     }
 
@@ -394,38 +395,44 @@ export class PaystackService {
 
     try {
       const { reason } = input;
-
-      const {
-        data: { data },
-        status,
-      } = await client.post<RefundResponse>('/refund', {
-        transaction: order.code,
+      const response = await client.post<{
+        status: boolean;
+        message: string;
+        data?: RefundResponse['data'];
+      }>('/refund', {
+        transaction: payment.transactionId,
         amount: input.amount,
         merchant_note: reason,
       });
+      const { status, data: body } = response;
+      const providerMessage =
+        typeof body?.message === 'string' ? body.message : null;
 
-      if (status !== 200) {
+      if (status !== 200 || body?.status === false) {
         Logger.error(
           buildLogMessage('Paystack refund failed', {
             orderCode: order.code,
             httpStatus: status,
-            body: typeof data === 'string' ? data : JSON.stringify(data),
+            body: typeof body === 'string' ? body : JSON.stringify(body),
           }),
           loggerCtx
         );
 
         return {
           state: 'Failed' as const,
-          transactionId: payment.metadata.public.transactionId,
+          transactionId: payment.transactionId,
+          metadata: {
+            public: { message: providerMessage || 'Paystack refund failed' },
+          },
         };
       }
 
       return {
-        state: 'Pending' as const,
-        transactionId: payment.metadata.public.transactionId,
+        state: 'Settled' as const,
+        transactionId: payment.transactionId,
         metadata: {
           public: {
-            reference: data.transaction.reference,
+            reference: body?.data?.transaction?.reference,
           },
         },
       };
@@ -436,7 +443,7 @@ export class PaystackService {
 
       return {
         state: 'Failed' as const,
-        transactionId: payment.metadata.public.transactionId,
+        transactionId: payment.transactionId,
       };
     }
   }
@@ -640,96 +647,42 @@ export class PaystackService {
 
   async handleRefundEvent({ data, event }: RefundEvent): Promise<void> {
     const { transaction_reference, refund_reference } = data;
-
     const outerCtx = await this.createContext();
 
-    this.connection.withTransaction(outerCtx, async (ctx: RequestContext) => {
-      const order = await this.orderService.findOneByCode(
-        ctx,
-        transaction_reference
-      );
-      if (!order) {
+    await this.connection.withTransaction(outerCtx, async (ctx) => {
+      const reference = transaction_reference || refund_reference;
+      const refund = reference
+        ? await this.connection
+            .getRepository(ctx, Refund)
+            .createQueryBuilder('refund')
+            .where(
+              `refund.metadata::jsonb -> 'public' ->> 'reference' = :reference`,
+              { reference }
+            )
+            .getOne()
+        : null;
+      if (!refund) {
         Logger.warn(
-          buildLogMessage('Paystack refund order not found', {
+          buildLogMessage('No Paystack refund found', {
             transactionReference: transaction_reference,
-          }),
-          loggerCtx
-        );
-        return;
-      }
-
-      const paymentMethod = await this.getConfiguredPaymentMethod(ctx);
-      const payment = order.payments.find(
-        (p) => p.method === paymentMethod.code
-      );
-
-      if (!payment) {
-        Logger.warn(
-          buildLogMessage('No Paystack payment found', {
-            orderCode: order.code,
-          }),
-          loggerCtx
-        );
-        return;
-      }
-
-      const pendingRefund = payment.refunds.find(
-        (refund) => refund.metadata.public.reference === refund_reference
-      );
-      if (!pendingRefund) {
-        Logger.warn(
-          buildLogMessage('No pending Paystack refund found', {
-            orderCode: order.code,
             refundReference: refund_reference,
           }),
           loggerCtx
         );
         return;
       }
-
-      switch (event) {
-        case 'refund.processed':
-          this.orderService.transitionRefundToState(
-            ctx,
-            pendingRefund.id,
-            'Settled'
-          );
-          Logger.info(
-            buildLogMessage('Paystack refund settled', {
-              orderCode: order.code,
-              refundReference: refund_reference,
-            }),
-            loggerCtx
-          );
-          break;
-        case 'refund.failed':
-          this.orderService.transitionRefundToState(
-            ctx,
-            pendingRefund.id,
-            'Failed'
-          );
-          Logger.error(
-            buildLogMessage('Paystack refund failed', {
-              orderCode: order.code,
-              refundReference: refund_reference,
-            }),
-            loggerCtx
-          );
-          break;
-        case 'refund.pending':
-          Logger.debug(
-            buildLogMessage('Paystack refund pending', {
-              orderCode: order.code,
-              refundReference: refund_reference,
-            }),
-            loggerCtx
-          );
-          break;
-        default:
-          Logger.warn(
-            buildLogMessage('Unhandled Paystack webhook event', { event }),
-            loggerCtx
-          );
+      if (event === 'refund.processed' && refund.state !== 'Settled') {
+        await this.orderService.transitionRefundToState(
+          ctx,
+          refund.id,
+          'Settled'
+        );
+      } else if (event === 'refund.failed' && refund.state === 'Pending') {
+        await this.orderService.transitionRefundToState(
+          ctx,
+          refund.id,
+          'Failed'
+        );
       }
     });
   }

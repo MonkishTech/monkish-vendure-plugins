@@ -956,8 +956,12 @@ describe('Mpesa Plugin', () => {
             ResultDesc: 'The service request is processed successfully.',
             OriginatorConversationID: '29115-34620561-1',
             ConversationID: 'AG_20210727_00005797af5d7d75f652',
-            TransactionID: 'RCPREV',
-            ResultParameters: { ResultParameter: [] },
+            TransactionID: 'REVNEW',
+            ResultParameters: {
+              ResultParameter: [
+                { Key: 'OriginalTransactionID', Value: 'RCPREV' },
+              ],
+            },
             ReferenceData: { ReferenceItem: { Key: '', Value: '' } },
           },
         }),

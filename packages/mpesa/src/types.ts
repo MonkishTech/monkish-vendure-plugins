@@ -64,7 +64,7 @@ export interface ReversalResponse {
 export interface ReversalCallbackPayload {
   Result: {
     ResultType: 0;
-    ResultCode: string;
+    ResultCode: string | number;
     ResultDesc: string;
     OriginatorConversationID: string;
     ConversationID: string;

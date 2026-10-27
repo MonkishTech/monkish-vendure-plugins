@@ -71,6 +71,22 @@ function sessionOwnsOrder(order: Order, ctx: RequestContext): boolean {
   return activeOrderId != null && String(activeOrderId) === String(order.id);
 }
 
+function reversalOriginalTransactionId(
+  payload: ReversalCallbackPayload
+): string | undefined {
+  const value = payload.Result.ResultParameters?.ResultParameter?.find(
+    (item) => item.Key === 'OriginalTransactionID'
+  )?.Value;
+  if (value == null || value === '') {
+    return undefined;
+  }
+  return String(value);
+}
+
+function reversalSucceeded(resultCode: string | number): boolean {
+  return resultCode === 0 || resultCode === '0';
+}
+
 function outstandingBalance(order: Order): number {
   const covered = (order.payments ?? [])
     .filter((payment) => payment.state === 'Settled')
@@ -671,22 +687,35 @@ export class MpesaService {
     payload: ReversalCallbackPayload
   ) {
     const { ResultCode, ResultDesc, TransactionID } = payload.Result;
+    const originalTransactionId = reversalOriginalTransactionId(payload);
+    if (!originalTransactionId) {
+      Logger.warn(
+        buildLogMessage(
+          'M-Pesa reversal callback missing OriginalTransactionID',
+          {
+            transactionId: TransactionID,
+          }
+        ),
+        loggerCtx
+      );
+      return;
+    }
 
     const refund = await this.connection.getRepository(ctx, Refund).findOne({
-      where: { transactionId: TransactionID },
+      where: { transactionId: originalTransactionId },
     });
 
     if (!refund) {
       Logger.warn(
         buildLogMessage('No M-Pesa refund found', {
-          transactionId: TransactionID,
+          transactionId: originalTransactionId,
         }),
         loggerCtx
       );
       return;
     }
 
-    if (ResultCode === '0') {
+    if (reversalSucceeded(ResultCode)) {
       await this.orderService.settleRefund(ctx, {
         id: refund.id,
         transactionId: TransactionID,

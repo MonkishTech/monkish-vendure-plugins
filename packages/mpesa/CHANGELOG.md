@@ -1,5 +1,11 @@
 # @monkish/vendure-mpesa-plugin
 
+## 0.0.4
+
+### Patch Changes
+
+- 340f476: Settle an M-Pesa refund when Daraja's reversal callback reports success against the original receipt.
+
 ## 0.0.3
 
 ### Patch Changes

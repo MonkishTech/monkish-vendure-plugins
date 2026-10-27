@@ -1,5 +1,11 @@
 # @monkish/vendure-paystack-plugin
 
+## 0.0.7
+
+### Patch Changes
+
+- 8d4a528: Keep an accepted Paystack refund in Validating until the processed or failed webhook.
+
 ## 0.0.6
 
 ### Patch Changes

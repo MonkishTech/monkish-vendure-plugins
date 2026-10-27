@@ -1,5 +1,11 @@
 # @monkish/vendure-paystack-plugin
 
+## 0.0.6
+
+### Patch Changes
+
+- 79fe1b1: Fix refunds
+
 ## 0.0.5
 
 ### Patch Changes

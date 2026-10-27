@@ -1,5 +1,11 @@
 # @monkish/vendure-paystack-plugin
 
+## 0.0.5
+
+### Patch Changes
+
+- b2bb778: Settle a Paystack charge once when checkout confirmation and the webhook overlap.
+
 ## 0.0.4
 
 ### Patch Changes

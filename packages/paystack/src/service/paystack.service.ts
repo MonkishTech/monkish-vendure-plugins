@@ -25,6 +25,7 @@ import {
 } from '@vendure/core';
 import axios, { AxiosInstance } from 'axios';
 import { paystackPaymentMethodHandler } from '../config/paystack.handler';
+import { lockOrderForSettlement } from './lock-order-row';
 import {
   CHARGE_AMOUNT_METADATA_KEY,
   loggerCtx,
@@ -538,6 +539,7 @@ export class PaystackService {
     if (!found) {
       throw new Error(`Paystack order ${orderCode} could not be loaded.`);
     }
+    await lockOrderForSettlement(this.connection, ctx, found.id);
     const order = await this.orderService.findOne(ctx, found.id, ['payments']);
     if (!order) {
       throw new Error(`Paystack order ${orderCode} could not be loaded.`);

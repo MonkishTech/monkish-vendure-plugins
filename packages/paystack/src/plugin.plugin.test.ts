@@ -727,6 +727,62 @@ describe('PaystackPlugin', () => {
     expect(settled.payments[0].transactionId).toBe('777');
   });
 
+  it('settles one payment when confirmation and the webhook overlap', async () => {
+    const order = await arrangeArrangingPayment(shopClient);
+    nock(`${PAYSTACK_API_URL}`)
+      .post('/transaction/initialize')
+      .reply(200, {
+        ...mockInitializeTransactionResponse,
+        data: {
+          ...mockInitializeTransactionResponse.data,
+          reference: 'overlap-ref',
+        },
+      });
+    await shopClient.query(CreatePaystackPaymentIntent, {
+      input: {
+        callbackUrl: 'https://example.com',
+        chargeAmount: order.totalWithTax + 50,
+      },
+    });
+    const metadata = {
+      order_code: order.code,
+      charge_amount: order.totalWithTax + 50,
+    };
+    mockVerify('overlap-ref', order.totalWithTax + 50, metadata, 778);
+    mockVerify('overlap-ref', order.totalWithTax + 50, metadata, 778);
+    const webhookBody = {
+      event: 'charge.success',
+      data: {
+        reference: 'overlap-ref',
+        id: 778,
+        amount: order.totalWithTax + 50,
+        metadata,
+      },
+    };
+    const bodyString = JSON.stringify(webhookBody);
+    const signature = createHmac('sha512', TEST_SECRET_KEY)
+      .update(bodyString)
+      .digest('hex');
+    const [confirmed, response] = await Promise.all([
+      shopClient.query(ConfirmPaystackPayment, { reference: 'overlap-ref' }),
+      shopClient.fetch(`http://localhost:${API_PORT}/payments/paystack`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-paystack-signature': signature,
+        },
+        body: bodyString,
+      }),
+    ]);
+    expect(confirmed.confirmPaystackPayment.state).toBe('PaymentSettled');
+    expect(response.status).toBe(200);
+    const { order: settled } = await adminClient.query(OrderPayments, {
+      id: confirmed.confirmPaystackPayment.id,
+    });
+    expect(settled.payments).toHaveLength(1);
+    expect(settled.payments[0].transactionId).toBe('778');
+  });
+
   it('rejects confirm when the verified amount differs from charge_amount', async () => {
     const order = await arrangeArrangingPayment(shopClient);
     nock(`${PAYSTACK_API_URL}`)

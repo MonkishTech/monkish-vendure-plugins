@@ -408,7 +408,8 @@ export class PaystackService {
       const providerMessage =
         typeof body?.message === 'string' ? body.message : null;
 
-      if (status !== 200 || body?.status === false) {
+      const refundStatus = body?.data?.status?.toLowerCase();
+      if (status !== 200 || body?.status === false || refundStatus === 'failed') {
         Logger.error(
           buildLogMessage('Paystack refund failed', {
             orderCode: order.code,
@@ -427,12 +428,31 @@ export class PaystackService {
         };
       }
 
+      const paystackRefundId = body?.data?.id;
+      if (paystackRefundId == null) {
+        Logger.error(
+          buildLogMessage('Paystack refund id is missing', {
+            orderCode: order.code,
+          }),
+          loggerCtx
+        );
+        return {
+          state: 'Failed' as const,
+          transactionId: payment.transactionId,
+          metadata: {
+            public: { message: 'Paystack refund id is missing' },
+          },
+        };
+      }
+
+      const reference = body?.data?.transaction?.reference;
       return {
-        state: 'Settled' as const,
-        transactionId: payment.transactionId,
+        state: 'Validating',
+        transactionId: String(paystackRefundId),
         metadata: {
           public: {
-            reference: body?.data?.transaction?.reference,
+            ...(typeof reference === 'string' ? { reference } : {}),
+            paystackRefundId: String(paystackRefundId),
           },
         },
       };
@@ -647,23 +667,19 @@ export class PaystackService {
 
   async handleRefundEvent({ data, event }: RefundEvent): Promise<void> {
     const { transaction_reference, refund_reference } = data;
+    const refundId = data.id == null ? '' : String(data.id);
     const outerCtx = await this.createContext();
 
     await this.connection.withTransaction(outerCtx, async (ctx) => {
-      const reference = transaction_reference || refund_reference;
-      const refund = reference
-        ? await this.connection
-            .getRepository(ctx, Refund)
-            .createQueryBuilder('refund')
-            .where(
-              `refund.metadata::jsonb -> 'public' ->> 'reference' = :reference`,
-              { reference }
-            )
-            .getOne()
+      const refund = refundId
+        ? await this.connection.getRepository(ctx, Refund).findOne({
+            where: { transactionId: refundId },
+          })
         : null;
       if (!refund) {
         Logger.warn(
           buildLogMessage('No Paystack refund found', {
+            refundId,
             transactionReference: transaction_reference,
             refundReference: refund_reference,
           }),
@@ -671,13 +687,15 @@ export class PaystackService {
         );
         return;
       }
-      if (event === 'refund.processed' && refund.state !== 'Settled') {
+      const awaitingProvider =
+        refund.state === 'Validating' || refund.state === 'Pending';
+      if (event === 'refund.processed' && awaitingProvider) {
         await this.orderService.transitionRefundToState(
           ctx,
           refund.id,
           'Settled'
         );
-      } else if (event === 'refund.failed' && refund.state === 'Pending') {
+      } else if (event === 'refund.failed' && awaitingProvider) {
         await this.orderService.transitionRefundToState(
           ctx,
           refund.id,

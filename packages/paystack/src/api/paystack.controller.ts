@@ -84,6 +84,7 @@ export class PaystackController {
           );
           break;
         case 'refund.processed':
+        case 'refund.processing':
         case 'refund.pending':
         case 'refund.failed':
           await this.paystackService.handleRefundEvent(payload as RefundEvent);

@@ -46,11 +46,11 @@ The webhook settles the same charge when confirm does not run. A second confirm 
 
 Amounts are minor units of the order currency.
 
-| Field | Meaning |
-| --- | --- |
-| `chargeAmount` | What Paystack collects. Defaults to the settlement amount. |
+| Field              | Meaning                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
+| `chargeAmount`     | What Paystack collects. Defaults to the settlement amount.                                     |
 | `settlementAmount` | What is written to `Payment.amount`. Defaults to the outstanding balance and cannot exceed it. |
-| `paystackAmount` | Deprecated alias of `chargeAmount`. |
+| `paystackAmount`   | Deprecated alias of `chargeAmount`.                                                            |
 
 `chargeAmount` must be a positive integer and at least the settlement amount. If `chargeAmount` and `paystackAmount` are both set and differ, initialize returns `PaystackPaymentIntentError`. `chargeAmount` is stored on the payment metadata. It is not added to `Payment.amount`.
 
@@ -107,16 +107,12 @@ mutation ConfirmPaystackPayment($reference: String!) {
 
 Webhook status codes:
 
-| Status | When |
-| --- | --- |
-| 400 | The signature is missing or invalid. |
-| 200 | The charge is settled, already settled, or rejected. |
-| 500 | The order cannot be loaded, or the database cannot be reached. Paystack should retry. |
+| Status | When                                                                                  |
+| ------ | ------------------------------------------------------------------------------------- |
+| 400    | The signature is missing or invalid.                                                  |
+| 200    | The charge is settled, already settled, or rejected.                                  |
+| 500    | The order cannot be loaded, or the database cannot be reached. Paystack should retry. |
 
 ## Refunds
 
-A Vendure refund calls Paystack and is created as `Pending`. The `refund.processed` webhook settles it. `refund.failed` marks it failed. `refund.pending` is acknowledged and leaves the refund pending.
-
-## Upgrade
-
-If the host app declared its own `confirmPaystackPayment` mutation and a service that adds the Paystack payment, delete that mutation and service. This plugin now provides `confirmPaystackPayment`. Storefront queries that select `id`, `code`, and `state` keep working. `paystackAmount` keeps working. New code should send `chargeAmount`.
+A Vendure refund calls Paystack and is created as `Validating` when Paystack accepts it. `refund.pending` and `refund.processing` leave it there. `refund.processed` settles it. `refund.failed` marks it failed. The refund is stored under the Paystack refund id, which the webhook uses to find it. A rejected Paystack call is created as `Failed`.

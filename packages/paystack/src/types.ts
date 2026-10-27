@@ -90,6 +90,7 @@ export type TransactionEvent = WebhookEvent & {
 
 export type RefundEvent = WebhookEvent & {
   data: {
+    id?: string | number;
     status: string;
     transaction_reference: string;
     refund_reference: string | null;

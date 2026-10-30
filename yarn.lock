@@ -4850,8 +4850,6 @@ __metadata:
   resolution: "@monkish/vendure-paystack-plugin@workspace:packages/paystack"
   dependencies:
     axios: "npm:^1.7.9"
-  peerDependencies:
-    typeorm: ^0.3.21
   languageName: unknown
   linkType: soft
 

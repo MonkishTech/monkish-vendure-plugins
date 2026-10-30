@@ -571,9 +571,6 @@ export class PaystackService {
     if (!order) {
       throw new Error(`Paystack order ${orderCode} could not be loaded.`);
     }
-    if (order.state === 'PaymentSettled') {
-      return order;
-    }
     const transactionId = String(verified.id);
     const existing = await this.connection.getRepository(ctx, Payment).findOne({
       where: { transactionId },
@@ -581,16 +578,21 @@ export class PaystackService {
     if (existing) {
       return order;
     }
-    const chargeAmount = numberFromMetadata(
-      verified.metadata,
-      CHARGE_AMOUNT_METADATA_KEY
-    );
-    if (chargeAmount != null && verified.amount !== chargeAmount) {
-      throw new PaystackSettleRejection(
-        'Verified Paystack amount does not match charge_amount.'
-      );
+    if (
+      order.state === 'PaymentSettled' ||
+      order.state === 'PaymentAuthorized'
+    ) {
+      return order;
+    }
+    if (outstandingBalance(order) <= 0) {
+      return order;
     }
     if (order.state !== 'ArrangingPayment') {
+      if (order.state !== 'AddingItems' && order.state !== 'Created') {
+        throw new PaystackSettleRejection(
+          `Paystack settlement cannot start from order state ${order.state}.`
+        );
+      }
       const transitioned = await this.orderService.transitionToState(
         ctx,
         order.id,
@@ -603,6 +605,15 @@ export class PaystackService {
     const fresh = await this.orderService.findOne(ctx, order.id, ['payments']);
     if (!fresh) {
       throw new Error(`Paystack order ${orderCode} could not be loaded.`);
+    }
+    const chargeAmount = numberFromMetadata(
+      verified.metadata,
+      CHARGE_AMOUNT_METADATA_KEY
+    );
+    if (chargeAmount != null && verified.amount !== chargeAmount) {
+      throw new PaystackSettleRejection(
+        'Verified Paystack amount does not match charge_amount.'
+      );
     }
     const outstanding = outstandingBalance(fresh);
     const explicitSettlement = numberFromMetadata(
@@ -627,6 +638,10 @@ export class PaystackService {
       if (!(added instanceof Order)) {
         throw new PaystackSettleRejection(added.message);
       }
+      const settled = await this.orderService.findOne(ctx, fresh.id);
+      if (!settled) {
+        throw new Error(`Paystack order ${orderCode} could not be loaded.`);
+      }
       Logger.info(
         buildLogMessage('Paystack payment settled', {
           orderCode,
@@ -634,7 +649,7 @@ export class PaystackService {
         }),
         loggerCtx
       );
-      return added;
+      return settled;
     }
     if (explicitSettlement > outstanding) {
       throw new PaystackSettleRejection(

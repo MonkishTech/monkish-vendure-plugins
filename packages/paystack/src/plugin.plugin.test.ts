@@ -3,13 +3,24 @@ import path from 'path';
 import { createHmac } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import gqlTag from 'graphql-tag';
-import { InitialData } from '@vendure/core';
+import {
+  Allocation,
+  InitialData,
+  OrderHistoryEntry,
+  OrderLine,
+  OrderService,
+  Payment,
+  RequestContextService,
+  TransactionalConnection,
+} from '@vendure/core';
 import {
   createTestEnvironment,
   registerInitializer,
+  PostgresInitializer,
   SimpleGraphQLClient,
   SqljsInitializer,
 } from '@vendure/testing';
+import { vi } from 'vitest';
 import { PaystackPlugin } from './paystack.plugin';
 import {
   initialData,
@@ -53,6 +64,7 @@ export const mockInitializeTransactionResponse: Omit<
 
 const TEST_DB_DIR = path.join(__dirname, '../__test_db__');
 const API_PORT = 8000;
+const postgres = process.env.DB === 'postgres';
 
 const ConfirmPaystackPayment = gqlTag`
   mutation ConfirmPaystackPayment($reference: String!) {
@@ -202,8 +214,135 @@ describe('PaystackPlugin', () => {
     }
     return { code: order.code, totalWithTax: order.totalWithTax };
   }
+
+  async function arrangeAddingItems(shopClient: SimpleGraphQLClient): Promise<{
+    id: string;
+    code: string;
+    totalWithTax: number;
+  }> {
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    const before = await shopClient.query(gqlTag`
+      query {
+        activeOrder {
+          id
+          state
+        }
+      }
+    `);
+    if (before.activeOrder) {
+      await shopClient.query(gqlTag`
+        mutation {
+          transitionOrderToState(state: "Cancelled") {
+            ... on Order {
+              state
+            }
+          }
+        }
+      `);
+    }
+    await addItem(shopClient, 1, 1);
+    await shopClient.query(gqlTag`
+      mutation {
+        setOrderShippingAddress(
+          input: {
+            fullName: "Ada Lovelace"
+            streetLine1: "1 Market Street"
+            city: "Nairobi"
+            postalCode: "00100"
+            countryCode: "KE"
+          }
+        ) {
+          ... on Order {
+            id
+          }
+        }
+      }
+    `);
+    const withMethods = await shopClient.query(ActiveOrderForPaystack);
+    const shippingMethodId = withMethods.eligibleShippingMethods[0].id;
+    await shopClient.query(
+      gqlTag`
+        mutation SetShipping($ids: [ID!]!) {
+          setOrderShippingMethod(shippingMethodId: $ids) {
+            ... on Order {
+              id
+              code
+              state
+              totalWithTax
+            }
+          }
+        }
+      `,
+      { ids: [shippingMethodId] }
+    );
+    const ready = await shopClient.query(gqlTag`
+      query {
+        activeOrder {
+          id
+          code
+          state
+          totalWithTax
+        }
+      }
+    `);
+    if (ready.activeOrder.state !== 'AddingItems') {
+      throw new Error(
+        `Order ${ready.activeOrder.code} is ${ready.activeOrder.state}, expected AddingItems`
+      );
+    }
+    return ready.activeOrder;
+  }
+
+  function numericOrderId(orderId: string): number {
+    return Number.parseInt(orderId.replace(/^T_/, ''), 10);
+  }
+
+  async function settlementSnapshot(orderId: string, transactionId: string) {
+    const connection = server.app.get(TransactionalConnection);
+    const requestContextService = server.app.get(RequestContextService);
+    const ctx = await requestContextService.create({ apiType: 'admin' });
+    const id = numericOrderId(orderId);
+    const payments = await connection.getRepository(ctx, Payment).find({
+      where: { transactionId },
+      relations: ['order'],
+    });
+    const history = await connection.getRepository(ctx, OrderHistoryEntry).find({
+      where: { order: { id } },
+    });
+    const lines = await connection.getRepository(ctx, OrderLine).find({
+      where: { order: { id } },
+    });
+    const allocations = await connection
+      .getRepository(ctx, Allocation)
+      .createQueryBuilder('allocation')
+      .innerJoin('allocation.orderLine', 'line')
+      .where('line.orderId = :id', { id })
+      .getMany();
+    const destination = (entry: OrderHistoryEntry) =>
+      (entry.data as { to?: string }).to;
+    const transitions = history.filter(
+      (entry) => entry.type === 'ORDER_STATE_TRANSITION'
+    );
+    const order = await server.app.get(OrderService).findOne(ctx, id);
+    return {
+      state: order?.state,
+      payments,
+      lines,
+      allocations,
+      arranging: transitions.filter(
+        (entry) => destination(entry) === 'ArrangingPayment'
+      ),
+      settled: transitions.filter(
+        (entry) => destination(entry) === 'PaymentSettled'
+      ),
+    };
+  }
+
   beforeAll(async () => {
     registerInitializer('sqljs', new SqljsInitializer(TEST_DB_DIR));
+    if (postgres) {
+      registerInitializer('postgres', new PostgresInitializer());
+    }
 
     await server.init({
       productsCsvPath: path.join(
@@ -249,7 +388,7 @@ describe('PaystackPlugin', () => {
 
   afterAll(async () => {
     await server.destroy();
-    rm(TEST_DB_DIR, { recursive: true });
+    await rm(TEST_DB_DIR, { recursive: true, force: true });
   });
 
   afterEach(() => {
@@ -995,5 +1134,153 @@ describe('PaystackPlugin', () => {
     expect(orders.items[0].state).toBe('PaymentSettled');
     expect(orders.items[0].payments[0].amount).toBe(order.totalWithTax);
     expect(orders.items[0].payments[0].metadata?.chargeAmount).toBeUndefined();
+  });
+
+  describe.skipIf(!postgres)('settlement race', () => {
+    it('serializes confirm and the webhook for one transaction id', async () => {
+      const order = await arrangeAddingItems(shopClient);
+      const chargeAmount = order.totalWithTax + 50;
+      nock(`${PAYSTACK_API_URL}`)
+        .post('/transaction/initialize')
+        .reply(200, {
+          ...mockInitializeTransactionResponse,
+          data: {
+            ...mockInitializeTransactionResponse.data,
+            reference: 'race-ref',
+          },
+        });
+      await shopClient.query(CreatePaystackPaymentIntent, {
+        input: {
+          callbackUrl: 'https://example.com',
+          chargeAmount,
+        },
+      });
+      const metadata = {
+        order_code: order.code,
+        charge_amount: chargeAmount,
+      };
+      mockVerify('race-ref', chargeAmount, metadata, 880);
+      mockVerify('race-ref', chargeAmount, metadata, 880);
+      const webhookBody = {
+        event: 'charge.success',
+        data: {
+          reference: 'race-ref',
+          id: 880,
+          amount: chargeAmount,
+          metadata,
+        },
+      };
+      const bodyString = JSON.stringify(webhookBody);
+      const signature = createHmac('sha512', TEST_SECRET_KEY)
+        .update(bodyString)
+        .digest('hex');
+      const [confirmed, response] = await Promise.all([
+        shopClient.query(ConfirmPaystackPayment, { reference: 'race-ref' }),
+        shopClient.fetch(`http://localhost:${API_PORT}/payments/paystack`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-paystack-signature': signature,
+          },
+          body: bodyString,
+        }),
+      ]);
+      expect(confirmed.confirmPaystackPayment.state).toBe('PaymentSettled');
+      expect(response.status).toBe(200);
+      const first = await settlementSnapshot(
+        confirmed.confirmPaystackPayment.id,
+        '880'
+      );
+      expect(first.payments).toHaveLength(1);
+      expect(String(first.payments[0].order?.id)).toBe(
+        String(numericOrderId(confirmed.confirmPaystackPayment.id))
+      );
+      expect(first.arranging).toHaveLength(1);
+      expect(first.settled).toHaveLength(1);
+      expect(first.lines).toHaveLength(1);
+      expect(first.allocations).toHaveLength(1);
+      expect(first.allocations[0].quantity).toBe(first.lines[0].quantity);
+
+      mockVerify('race-ref', chargeAmount, metadata, 880);
+      const third = await shopClient.query(ConfirmPaystackPayment, {
+        reference: 'race-ref',
+      });
+      expect(third.confirmPaystackPayment.state).toBe('PaymentSettled');
+      const second = await settlementSnapshot(
+        confirmed.confirmPaystackPayment.id,
+        '880'
+      );
+      expect(second.state).toBe(first.state);
+      expect(second.payments).toHaveLength(1);
+      expect(second.arranging).toHaveLength(1);
+      expect(second.settled).toHaveLength(1);
+      expect(second.allocations).toHaveLength(1);
+    });
+
+    it('does not transition an order that is already PaymentSettled', async () => {
+      const order = await arrangeAddingItems(shopClient);
+      const chargeAmount = order.totalWithTax + 50;
+      nock(`${PAYSTACK_API_URL}`)
+        .post('/transaction/initialize')
+        .reply(200, {
+          ...mockInitializeTransactionResponse,
+          data: {
+            ...mockInitializeTransactionResponse.data,
+            reference: 'settled-ref',
+          },
+        });
+      await shopClient.query(CreatePaystackPaymentIntent, {
+        input: {
+          callbackUrl: 'https://example.com',
+          chargeAmount,
+        },
+      });
+      const metadata = {
+        order_code: order.code,
+        charge_amount: chargeAmount,
+      };
+      mockVerify('settled-ref', chargeAmount, metadata, 881);
+      await shopClient.query(ConfirmPaystackPayment, { reference: 'settled-ref' });
+      mockVerify('other-ref', chargeAmount, metadata, 882);
+      const orderService = server.app.get(OrderService);
+      const spy = vi.spyOn(orderService, 'transitionToState');
+      try {
+        const second = await shopClient.query(ConfirmPaystackPayment, {
+          reference: 'other-ref',
+        });
+        expect(second.confirmPaystackPayment.state).toBe('PaymentSettled');
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('rejects Cancelled without calling transitionToState', async () => {
+      const order = await arrangeAddingItems(shopClient);
+      await shopClient.query(gqlTag`
+        mutation {
+          transitionOrderToState(state: "Cancelled") {
+            ... on Order {
+              state
+            }
+          }
+        }
+      `);
+      const metadata = {
+        order_code: order.code,
+        charge_amount: order.totalWithTax,
+      };
+      mockVerify('cancelled-ref', order.totalWithTax, metadata, 883);
+      const orderService = server.app.get(OrderService);
+      const spy = vi.spyOn(orderService, 'transitionToState');
+      try {
+        await expect(
+          shopClient.query(ConfirmPaystackPayment, { reference: 'cancelled-ref' })
+        ).rejects.toThrow(/cannot start from order state Cancelled/);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 });

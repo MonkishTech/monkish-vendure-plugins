@@ -1,49 +1,51 @@
-import { LockNotSupportedOnGivenDriverError } from 'typeorm';
 import { lockOrderForSettlement } from './lock-order-row';
 
-function connectionFor(getOne: () => Promise<unknown>) {
-  const calls: string[] = [];
-  const builder = {
-    setLock(mode: string) {
-      calls.push(mode);
-      return builder;
-    },
-    where(clause: string, params: { id: string }) {
-      calls.push(`${clause}:${params.id}`);
-      return builder;
-    },
-    getOne,
-  };
+const sql = 'SELECT id FROM "order" WHERE id = $1 FOR UPDATE';
+const orderId = 'order-1';
+
+function connectionFor(
+  type: string,
+  query: (sqlText: string, params: readonly unknown[]) => Promise<unknown>
+) {
+  const calls: unknown[][] = [];
   return {
     calls,
     connection: {
+      rawConnection: { options: { type } },
       getRepository: () => ({
-        createQueryBuilder: () => builder,
+        manager: {
+          query: async (sqlText: string, params: readonly unknown[]) => {
+            calls.push([sqlText, params]);
+            return query(sqlText, params);
+          },
+        },
       }),
     },
   };
 }
 
-const orderId = 'order-1';
-
 describe('lockOrderForSettlement', () => {
-  it('locks that order row for update and does not join relations', async () => {
-    const { calls, connection } = connectionFor(async () => ({ id: orderId }));
+  it('locks that order row for update on postgres', async () => {
+    const { calls, connection } = connectionFor('postgres', async () => [{ id: orderId }]);
     await lockOrderForSettlement(connection as never, {} as never, orderId);
-    expect(calls).toEqual(['pessimistic_write', 'order.id = :id:order-1']);
+    expect(calls).toEqual([[sql, [orderId]]]);
   });
 
-  it('continues when the driver cannot lock rows', async () => {
-    const { connection } = connectionFor(async () => {
-      throw new LockNotSupportedOnGivenDriverError();
-    });
-    await expect(
-      lockOrderForSettlement(connection as never, {} as never, orderId)
-    ).resolves.toBeUndefined();
+  it('does not query when the driver is not postgres', async () => {
+    let queried = false;
+    const connection = {
+      rawConnection: { options: { type: 'sqljs' } },
+      getRepository: () => {
+        queried = true;
+        return { manager: { query: async () => undefined } };
+      },
+    };
+    await lockOrderForSettlement(connection as never, {} as never, orderId);
+    expect(queried).toBe(false);
   });
 
-  it('rethrows any other lock failure', async () => {
-    const { connection } = connectionFor(async () => {
+  it('rethrows a postgres lock failure', async () => {
+    const { connection } = connectionFor('postgres', async () => {
       throw new Error('connection closed');
     });
     await expect(

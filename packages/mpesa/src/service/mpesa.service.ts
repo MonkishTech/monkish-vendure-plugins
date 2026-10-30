@@ -46,6 +46,7 @@ import {
   TokenResponse,
 } from '../types';
 import { formatPhoneNumber } from '../util/phone-utils';
+import { lockOrderForSettlement } from './lock-order-row';
 import { buildLogMessage, logProviderError } from './log-provider-error';
 
 export class MpesaSettleRejection extends Error {
@@ -503,8 +504,51 @@ export class MpesaService {
     payload: STKCallbackPayload
   ) {
     const { CheckoutRequestID, CallbackMetadata } = payload.Body.stkCallback;
-    const charge = order.customFields.mpesaChargeAmount;
-    const settlement = order.customFields.mpesaSettlementAmount;
+    await lockOrderForSettlement(this.connection, ctx, order.id);
+    const locked = await this.orderService.findOne(ctx, order.id, ['payments']);
+    if (!locked) {
+      throw new Error(
+        `M-Pesa order for ${CheckoutRequestID} could not be loaded.`
+      );
+    }
+    const existing = await this.connection.getRepository(ctx, Payment).findOne({
+      where: { transactionId: CheckoutRequestID },
+    });
+    if (existing) {
+      return;
+    }
+    if (
+      locked.state === 'PaymentSettled' ||
+      locked.state === 'PaymentAuthorized'
+    ) {
+      return;
+    }
+    if (outstandingBalance(locked) <= 0) {
+      return;
+    }
+    if (locked.state !== 'ArrangingPayment') {
+      if (locked.state !== 'AddingItems' && locked.state !== 'Created') {
+        throw new MpesaSettleRejection(
+          `M-Pesa settlement cannot start from order state ${locked.state}.`
+        );
+      }
+      const transitioned = await this.orderService.transitionToState(
+        ctx,
+        locked.id,
+        'ArrangingPayment'
+      );
+      if (transitioned instanceof OrderStateTransitionError) {
+        throw new MpesaSettleRejection(transitioned.message);
+      }
+    }
+    const fresh = await this.orderService.findOne(ctx, locked.id, ['payments']);
+    if (!fresh) {
+      throw new Error(
+        `M-Pesa order for ${CheckoutRequestID} could not be loaded.`
+      );
+    }
+    const charge = fresh.customFields.mpesaChargeAmount;
+    const settlement = fresh.customFields.mpesaSettlementAmount;
     const amountValue = CallbackMetadata?.Item?.find(
       (item) => item.Name === 'Amount'
     )?.Value;
@@ -515,25 +559,6 @@ export class MpesaService {
         'Verified M-Pesa amount does not match mpesaChargeAmount.'
       );
     }
-
-    if (order.state !== 'ArrangingPayment') {
-      const transitioned = await this.orderService.transitionToState(
-        ctx,
-        order.id,
-        'ArrangingPayment'
-      );
-      if (transitioned instanceof OrderStateTransitionError) {
-        throw new MpesaSettleRejection(transitioned.message);
-      }
-    }
-
-    const fresh = await this.orderService.findOne(ctx, order.id, ['payments']);
-    if (!fresh) {
-      throw new Error(
-        `M-Pesa order for ${CheckoutRequestID} could not be loaded.`
-      );
-    }
-
     const outstanding = outstandingBalance(fresh);
     const receipt =
       CallbackMetadata?.Item?.find((item) => item.Name === 'MpesaReceiptNumber')
@@ -543,7 +568,6 @@ export class MpesaService {
       MpesaReceiptNumber: receipt,
       ...(typeof charge === 'number' ? { chargeAmount: charge } : {}),
     };
-
     if (settlement == null) {
       if (typeof charge === 'number' && outstanding > charge) {
         throw new MpesaSettleRejection(
@@ -566,7 +590,6 @@ export class MpesaService {
       );
       return;
     }
-
     if (settlement > outstanding) {
       throw new MpesaSettleRejection(
         'settlementAmount cannot exceed the outstanding balance.'

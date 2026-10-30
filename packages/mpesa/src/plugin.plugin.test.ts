@@ -3,13 +3,19 @@ import path from 'path';
 import { rm } from 'node:fs/promises';
 import gqlTag from 'graphql-tag';
 import {
+  Allocation,
   CurrencyCode,
   InitialData,
+  OrderHistoryEntry,
+  OrderLine,
   OrderService,
+  Payment,
   RequestContextService,
+  TransactionalConnection,
 } from '@vendure/core';
 import {
   createTestEnvironment,
+  PostgresInitializer,
   registerInitializer,
   SimpleGraphQLClient,
   SqljsInitializer,
@@ -30,8 +36,10 @@ import {
   STK_PUSH_CALLBACK_ENDPOINT,
 } from './constants';
 import { MpesaPaymentStatusBus } from './payment-status/mpesa-payment-status-bus';
+import { MpesaService, MpesaSettleRejection } from './service/mpesa.service';
 
 const API_PORT = 3050;
+const postgres = process.env.DB === 'postgres';
 const TEST_DB_DIR = path.join(__dirname, '../__test_db__');
 const API_CERTIFICATE = `-----BEGIN CERTIFICATE-----
 MIIDCzCCAfOgAwIBAgIUKPxBilHEHcuRBENj8GqZA/5rGPYwDQYJKoZIhvcNAQEL
@@ -149,6 +157,9 @@ describe('Mpesa Plugin', () => {
 
   beforeAll(async () => {
     registerInitializer('sqljs', new SqljsInitializer(TEST_DB_DIR));
+    if (postgres) {
+      registerInitializer('postgres', new PostgresInitializer());
+    }
     await server.init({
       productsCsvPath: path.join(
         __dirname,
@@ -170,7 +181,7 @@ describe('Mpesa Plugin', () => {
 
   afterAll(async () => {
     await server.destroy();
-    await rm(TEST_DB_DIR, { recursive: true });
+    await rm(TEST_DB_DIR, { recursive: true, force: true });
   });
 
   beforeEach(() => {
@@ -403,6 +414,64 @@ describe('Mpesa Plugin', () => {
         },
       },
     };
+  }
+
+  function numericOrderId(orderId: string): number {
+    return Number.parseInt(orderId.replace(/^T_/, ''), 10);
+  }
+
+  async function settlementSnapshot(orderId: string, transactionId: string) {
+    const connection = server.app.get(TransactionalConnection);
+    const requestContextService = server.app.get(RequestContextService);
+    const ctx = await requestContextService.create({ apiType: 'admin' });
+    const id = numericOrderId(orderId);
+    const payments = await connection.getRepository(ctx, Payment).find({
+      where: { transactionId },
+      relations: ['order'],
+    });
+    const history = await connection.getRepository(ctx, OrderHistoryEntry).find({
+      where: { order: { id } },
+    });
+    const lines = await connection.getRepository(ctx, OrderLine).find({
+      where: { order: { id } },
+    });
+    const allocations = await connection
+      .getRepository(ctx, Allocation)
+      .createQueryBuilder('allocation')
+      .innerJoin('allocation.orderLine', 'line')
+      .where('line.orderId = :id', { id })
+      .getMany();
+    const destination = (entry: OrderHistoryEntry) =>
+      (entry.data as { to?: string }).to;
+    const transitions = history.filter(
+      (entry) => entry.type === 'ORDER_STATE_TRANSITION'
+    );
+    const order = await server.app.get(OrderService).findOne(ctx, id);
+    return {
+      state: order?.state,
+      payments,
+      lines,
+      allocations,
+      arranging: transitions.filter(
+        (entry) => destination(entry) === 'ArrangingPayment'
+      ),
+      settled: transitions.filter(
+        (entry) => destination(entry) === 'PaymentSettled'
+      ),
+    };
+  }
+
+  async function adminContext() {
+    return server.app.get(RequestContextService).create({ apiType: 'admin' });
+  }
+
+  async function arrangeFreshAddingItems() {
+    await shopClient.asUserWithCredentials(customer.emailAddress, 'test');
+    const before = await shopClient.query(ActiveOrderForMpesa);
+    if (before.activeOrder) {
+      await cancelActiveOrder(shopClient);
+    }
+    return arrangeAddingItems(shopClient);
   }
 
   function captureStk(checkoutRequestId: string) {
@@ -1403,5 +1472,88 @@ describe('Mpesa Plugin', () => {
     expect(response.status).toBe(200);
     expect(parseMpesaEvents(body)).toEqual([]);
     await cancelActiveOrder(shopClient);
+  });
+
+  describe.skipIf(!postgres)('settlement race', () => {
+    it('serializes two STK callbacks for one CheckoutRequestID', async () => {
+      const order = await arrangeFreshAddingItems();
+      await setCheckoutRequestId(order.id, 'ws_CO_race');
+      mockStkQuery('ws_CO_race');
+      mockStkQuery('ws_CO_race');
+      const service = server.app.get(MpesaService);
+      const payload = successCallback('ws_CO_race', 1, 'RCPACE');
+      const [ctxA, ctxB] = await Promise.all([adminContext(), adminContext()]);
+      await Promise.all([
+        service.handleStkPushCallback(ctxA, payload),
+        service.handleStkPushCallback(ctxB, payload),
+      ]);
+      const first = await settlementSnapshot(order.id, 'ws_CO_race');
+      expect(first.state).toBe('PaymentSettled');
+      expect(first.payments).toHaveLength(1);
+      expect(String(first.payments[0].order?.id)).toBe(
+        String(numericOrderId(order.id))
+      );
+      expect(first.arranging).toHaveLength(1);
+      expect(first.settled).toHaveLength(1);
+      expect(first.lines).toHaveLength(1);
+      expect(first.allocations).toHaveLength(1);
+      expect(first.allocations[0].quantity).toBe(first.lines[0].quantity);
+
+      const ctxC = await adminContext();
+      await service.handleStkPushCallback(ctxC, payload);
+      const second = await settlementSnapshot(order.id, 'ws_CO_race');
+      expect(second.state).toBe(first.state);
+      expect(second.payments).toHaveLength(1);
+      expect(second.arranging).toHaveLength(1);
+      expect(second.settled).toHaveLength(1);
+      expect(second.allocations).toHaveLength(1);
+    });
+
+    it('does not transition an order that is already PaymentSettled', async () => {
+      const order = await arrangeFreshAddingItems();
+      await setCheckoutRequestId(order.id, 'ws_CO_settled_src');
+      mockStkQuery('ws_CO_settled_src');
+      const service = server.app.get(MpesaService);
+      const ctx = await adminContext();
+      await service.handleStkPushCallback(
+        ctx,
+        successCallback('ws_CO_settled_src', 1, 'RCPSRC')
+      );
+      await setCheckoutRequestId(order.id, 'ws_CO_settled_guard');
+      mockStkQuery('ws_CO_settled_guard');
+      const orderService = server.app.get(OrderService);
+      const spy = vi.spyOn(orderService, 'transitionToState');
+      try {
+        const guardCtx = await adminContext();
+        await service.handleStkPushCallback(
+          guardCtx,
+          successCallback('ws_CO_settled_guard', 1, 'RCPGUARD')
+        );
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('rejects Cancelled without calling transitionToState', async () => {
+      const order = await arrangeFreshAddingItems();
+      await cancelActiveOrder(shopClient);
+      await setCheckoutRequestId(order.id, 'ws_CO_cancelled');
+      const service = server.app.get(MpesaService);
+      const orderService = server.app.get(OrderService);
+      const spy = vi.spyOn(orderService, 'transitionToState');
+      try {
+        const ctx = await adminContext();
+        await expect(
+          service.handleStkPushCallback(
+            ctx,
+            successCallback('ws_CO_cancelled', 1, 'RCPCAN')
+          )
+        ).rejects.toBeInstanceOf(MpesaSettleRejection);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 });

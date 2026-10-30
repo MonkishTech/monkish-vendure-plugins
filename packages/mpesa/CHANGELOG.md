@@ -1,5 +1,11 @@
 # @monkish/vendure-mpesa-plugin
 
+## 0.0.5
+
+### Patch Changes
+
+- e75ee45: Settle one M-Pesa STK callback when Safaricom delivers the same CheckoutRequestID twice.
+
 ## 0.0.4
 
 ### Patch Changes

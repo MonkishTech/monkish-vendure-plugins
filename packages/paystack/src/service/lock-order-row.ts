@@ -4,22 +4,18 @@ import {
   RequestContext,
   TransactionalConnection,
 } from '@vendure/core';
-import { LockNotSupportedOnGivenDriverError } from 'typeorm';
+
+const LOCK_ORDER_SQL = 'SELECT id FROM "order" WHERE id = $1 FOR UPDATE';
 
 export async function lockOrderForSettlement(
   connection: TransactionalConnection,
   ctx: RequestContext,
   orderId: ID
 ): Promise<void> {
-  try {
-    await connection
-      .getRepository(ctx, Order)
-      .createQueryBuilder('order')
-      .setLock('pessimistic_write')
-      .where('order.id = :id', { id: orderId })
-      .getOne();
-  } catch (error) {
-    if (error instanceof LockNotSupportedOnGivenDriverError) return;
-    throw error;
+  if (connection.rawConnection.options.type !== 'postgres') {
+    return;
   }
+  await connection
+    .getRepository(ctx, Order)
+    .manager.query(LOCK_ORDER_SQL, [orderId]);
 }

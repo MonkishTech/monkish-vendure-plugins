@@ -45,6 +45,8 @@ The plugin adds three public custom fields to each product variant. Set them in 
 | `lipaMdogoMinimum` | Lipa mdogo deposit | Deposit for one unit, in minor units. Default `0`. The order deposit is this value times the quantity. |
 | `lipaMdogoDeadline` | Lipa mdogo deadline | Datetime. A plan cannot start once this moment has passed. The plan stores this value as its deadline. |
 
+In the React Dashboard, `lipaMdogoMinimum` uses Vendure's `currency-form-input`, so admins enter a currency amount rather than raw minor units. The stored value remains minor units.
+
 Every line in the order must be that same variant. A second variant makes `startLipaMdogoPlan` fail. Shipping and other order charges stay inside the order total and are part of the same plan. Changing these fields later does not change a plan that already exists.
 
 ## Starting a plan
@@ -101,6 +103,12 @@ Subscribe with `EventBus`. The plugin does not send email or SMS.
 | `LipaMdogoPlanMissedEvent` | The deadline passed with a balance still owed, and the refund and cancel succeeded. |
 
 A repeated `daysBefore` for the same plan is the same reminder.
+
+## Dashboard
+
+The plugin registers a React Dashboard extension (`dashboard/index.tsx`). On the order detail page, a **Lipa mdogo plan** side block appears when the order has a plan. It shows state, deadline, outstanding, and minimum due using the order's `currencyCode`. Orders without a plan do not show the block.
+
+This extension targets the React Dashboard only. Legacy Admin UI is not extended.
 
 ## Errors
 

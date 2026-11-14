@@ -34,6 +34,7 @@ export interface LipaMdogoPluginOptions {
     schema: adminApiExtensions,
     resolvers: [LipaMdogoOrderResolver],
   },
+  dashboard: '../dashboard/index.tsx',
   configuration: (config) => {
     addLipaMdogoCustomFields(config);
     config.schedulerOptions.tasks.push(lipaMdogoPlansTask);

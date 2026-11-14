@@ -1,5 +1,11 @@
 # @monkish/vendure-lipa-mdogo-plugin
 
+## 0.0.4
+
+### Patch Changes
+
+- 16e77de: Use the Dashboard currency input for the lipa mdogo deposit field, and show read-only plan money on the order detail page.
+
 ## 0.0.3
 
 ### Patch Changes

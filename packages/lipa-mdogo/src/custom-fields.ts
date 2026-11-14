@@ -23,6 +23,7 @@ export function addLipaMdogoCustomFields(config: RuntimeVendureConfig): void {
       defaultValue: 0,
       public: true,
       label: [{ languageCode: LanguageCode.en, value: 'Lipa mdogo deposit' }],
+      ui: { component: 'currency-form-input' },
     },
     {
       name: 'lipaMdogoDeadline',

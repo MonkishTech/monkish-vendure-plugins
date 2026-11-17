@@ -30,6 +30,7 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "target": "es2022",
+    "useDefineForClassFields": false,
     "verbatimModuleSyntax": false
   }
 }

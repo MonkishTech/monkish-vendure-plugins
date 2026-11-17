@@ -1,5 +1,11 @@
 # @monkish/vendure-lipa-mdogo-plugin
 
+## 0.0.5
+
+### Patch Changes
+
+- 2fe7487: Keep Lipa Mdogo plan fields when constructing entities under the es2022 build target.
+
 ## 0.0.4
 
 ### Patch Changes
